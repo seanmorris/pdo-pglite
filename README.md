@@ -46,10 +46,21 @@ const php = new PhpWeb({PGlite});
 
 php.run(`<?php
     $pdo = new PDO('pgsql:idb-storage');
-    $stm = $pdo->prepare('SELECT * FROM pg_catalog.pg_tables');
+    $stm = $pdo->prepare(
+        'SELECT * FROM pg_catalog.pg_tables WHERE schemaname = :schema'
+    );
     $out = fopen('php://stdout', 'w');
+
+    $stm->execute([
+        'schema' => 'pg_catalog'
+    ]);
     
-    while($row = $stm->fetch()) {
+    $headers = false;
+    while ($row = $stm->fetch(PDO::FETCH_ASSOC)) {
+        if (!$headers) {
+            fputcsv($out, array_keys($row));
+            $headers = true;
+        }
         fputcsv($out, $row);
     }
 `);
