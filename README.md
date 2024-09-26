@@ -7,13 +7,12 @@
 ### Join the community: [reddit](https://www.reddit.com/r/phpwasm/) | [discord](https://discord.gg/j8VZzju7gJ) | [php-wasm](https://github.com/seanmorris/php-wasm)
 
 
-## Install and Use
+## Install
 
 Simply pass the PGlite object into the php-wasm constructor to enable pdo_pglite support:
 
 ```javascript
 import { PGlite } from '@electric-sql/pglite';
-
 const php = new PhpWeb({PGlite});
 ```
 
@@ -21,19 +20,31 @@ You can even load PGlite from a CDN:
 
 ```javascript
 import { PGlite } from 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite/dist/index.js';
-
 const php = new PhpWeb({PGlite});
 ```
+
+## Connect & Configure
 
 Once PGlite is passed in, `pgsql:` will be available as a PDO driver.
 
 ```javascript
-import { PGlite } from '@electric-sql/pglite';
-
+import { PGlite } from 'https://cdn.jsdelivr.net/npm/@electric-sql/pglite/dist/index.js';
 const php = new PhpWeb({PGlite});
 
 php.run(`<?php
-    phpinfo();
+    $pdo = new PDO('pgsql:idb-storage');
+`);
+```
+
+## Usage
+
+Use pdo-pglite like you'd use any other PDO connector. Prepared statements, as well as positional & named placeholders are supported.
+
+```javascript
+import { PGlite } from '@electric-sql/pglite';
+const php = new PhpWeb({PGlite});
+
+php.run(`<?php
     $pdo = new PDO('pgsql:idb-storage');
     $stm = $pdo->prepare('SELECT * FROM pg_catalog.pg_tables');
     $out = fopen('php://stdout', 'w');
@@ -50,27 +61,32 @@ PGlite can also be used right from static HTML. Just pass it in the `data-import
 <html>
 <body>
     <script async type = "module" src = "./php-tags.mjs"></script>
-    <script
-        type = "text/php"
-        data-stdout = "#output"
-        data-stderr = "#error"
-        data-imports = '{
-            "https://cdn.jsdelivr.net/npm/@electric-sql/pglite/dist/index.js": ["PGlite"]
-        }'>
-    <?php
+    <script type = "text/php" data-stdout = "#output" data-stderr = "#error" data-imports = '{
+        "https://cdn.jsdelivr.net/npm/@electric-sql/pglite/dist/index.js": ["PGlite"]
+    }'><?php
         $pdo = new PDO('pgsql:idb-storage');
-        $stm = $pdo->prepare('SELECT * FROM pg_catalog.pg_tables');
+        $stm = $pdo->prepare(
+            'SELECT * FROM pg_catalog.pg_tables WHERE schemaname = :schema'
+        );
         $out = fopen('php://stdout', 'w');
+
+        $stm->execute([
+            'schema' => 'pg_catalog'
+        ]);
         
-        while($row = $stm->fetch()) {
+        $headers = false;
+        while ($row = $stm->fetch(PDO::FETCH_ASSOC)) {
+            if (!$headers) {
+                fputcsv($out, array_keys($row));
+                $headers = true;
+            }
             fputcsv($out, $row);
         }
     </script>
-    <span id = "output"></pre>
-    <span id = "error"></pre>
+    <pre id = "output"></pre>
+    <pre id = "error"></pre>
 </body>
 </html>
-
 ```
 
 ## @electric-sql/pglite
