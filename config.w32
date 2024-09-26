@@ -1,0 +1,7 @@
+ARG_ENABLE('pdo_pglite', 'pdo_pglite support', 'no');
+
+if (PHP_PDO_PGLITE != 'no') {
+	AC_DEFINE('HAVE_PDO_PGLITE', 1, 'pdo_pglite support enabled');
+
+	EXTENSION('pdo_pglite', 'pdo_pglite.c', null, '/DZEND_ENABLE_STATIC_TSRMLS_CACHE=1');
+}
