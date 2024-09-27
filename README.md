@@ -6,9 +6,6 @@
 
 ### Join the community: [reddit](https://www.reddit.com/r/phpwasm/) | [discord](https://discord.gg/j8VZzju7gJ) | [php-wasm](https://github.com/seanmorris/php-wasm)
 
-
-## Install
-
 Simply pass the PGlite object into the php-wasm constructor to enable pdo_pglite support:
 
 ```javascript

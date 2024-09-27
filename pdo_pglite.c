@@ -72,12 +72,12 @@ int pdo_pglite_error(
 	return errcode;
 }
 
+// PHP_INI_BEGIN()
+// PHP_INI_ENTRY("pdo_pglite.prefix", "pgsql", PHP_INI_SYSTEM|PHP_INI_PERDIR, NULL)
+// PHP_INI_END()
+
 #include "pdo_pglite_db_statement.c"
 #include "pdo_pglite_db.c"
-
-PHP_INI_BEGIN()
-PHP_INI_ENTRY("pdo_pglite.prefix", "pgsql", PHP_INI_SYSTEM|PHP_INI_PERDIR, NULL)
-PHP_INI_END()
 
 PHP_RINIT_FUNCTION(pdo_pglite)
 {
@@ -86,7 +86,7 @@ PHP_RINIT_FUNCTION(pdo_pglite)
 
 PHP_MINIT_FUNCTION(pdo_pglite)
 {
-	REGISTER_INI_ENTRIES();
+	// REGISTER_INI_ENTRIES();
 #if defined(ZTS) && defined(COMPILE_DL_PDO_PGLITE)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
@@ -102,12 +102,12 @@ PHP_MINFO_FUNCTION(pdo_pglite)
 	);
 	php_info_print_table_end();
 
-	DISPLAY_INI_ENTRIES();
+	// DISPLAY_INI_ENTRIES();
 }
 
 PHP_MSHUTDOWN_FUNCTION(pdo_pglite)
 {
-	UNREGISTER_INI_ENTRIES();
+	// UNREGISTER_INI_ENTRIES();
 	return SUCCESS;
 }
 
