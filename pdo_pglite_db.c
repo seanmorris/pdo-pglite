@@ -16,9 +16,8 @@ static void pdo_pglite_handle_closer(pdo_dbh_t *dbh)
 static bool pdo_pglite_handle_preparer(pdo_dbh_t *dbh, zend_string *sql, pdo_stmt_t *stmt, zval *driver_options)
 {
 	pdo_pglite_db_handle *handle = dbh->driver_data;
-	pdo_pglite_stmt *vStmt = emalloc(sizeof(pdo_pglite_stmt));
+	pdo_pglite_stmt *vStmt = emalloc(sizeof(pdo_pglite_stmt)); // @todo: Figure out if we need to clear this.
 
-	int ret;
 	zend_string *nsql = NULL;
 
 	stmt->methods = &pdo_pglite_stmt_methods;
@@ -26,13 +25,13 @@ static bool pdo_pglite_handle_preparer(pdo_dbh_t *dbh, zend_string *sql, pdo_stm
 	stmt->supports_placeholders = PDO_PLACEHOLDER_NAMED;
 	stmt->named_rewrite_template = "$%d";
 
-	ret = pdo_parse_params(stmt, sql, &nsql);
+	int parseStatus = pdo_parse_params(stmt, sql, &nsql);
 
-	if(ret == 1) // query was re-written
+	if(parseStatus == 1) // query was re-written
 	{
 		sql = nsql;
 	}
-	else if(ret == -1) // couldn't grok it
+	else if(parseStatus == -1) // couldn't grok it
 	{
 		strcpy(dbh->error_code, stmt->error_code);
 		efree(vStmt);
@@ -41,22 +40,23 @@ static bool pdo_pglite_handle_preparer(pdo_dbh_t *dbh, zend_string *sql, pdo_stm
 
 	const char *sqlString = ZSTR_VAL(sql);
 
-	zval *prepared = EM_ASM_PTR({
+	zval prepared;
+
+	EM_ASM_PTR({
 		const db = Module.zvalToJS($0);
 		const query  = UTF8ToString($1);
 		const supports_placeholders = $2;
-		const ret = $3;
+		const zv = $3;
 
 		const prepared = (...params) => db.query(query, params);
 		prepared.query = query;
-		const zval = Module.jsToZval(prepared);
 
-		return zval;
+		Module.jsToZval(prepared, zv);
 
-	}, handle->dbPtr, sqlString, stmt->supports_placeholders, ret);
+	}, &handle->db, sqlString, stmt->supports_placeholders, &prepared);
 
 	vStmt->db   = handle;
-	vStmt->stmt = vrzno_fetch_object(Z_OBJ_P(prepared));
+	vStmt->stmt = vrzno_fetch_object(Z_OBJ(prepared));
 
 	return true;
 }
@@ -72,7 +72,7 @@ static zend_long pdo_pglite_handle_doer(pdo_dbh_t *dbh, const zend_string *sql)
 		// const query  = UTF8ToString($1);
 		return 1;
 
-	}, handle->dbPtr, &sqlString);
+	}, &handle->db, &sqlString);
 }
 
 static zend_string *pdo_pglite_handle_quoter(pdo_dbh_t *dbh, const zend_string *unquoted, enum pdo_param_type paramtype)
@@ -126,7 +126,7 @@ static bool pdo_pglite_set_attr(pdo_dbh_t *dbh, zend_long attr, zval *val)
 	return (bool) EM_ASM_INT({
 		console.log('SET ATTR', $0, $1, $2);
 		return true;
-	}, handle->dbPtr, attr, val);
+	}, &handle->db, attr, val);
 }
 
 EM_ASYNC_JS(int, pdo_pglite_real_last_insert_id, (pdo_pglite_db_handle *handle, const char *namePtr), {
@@ -193,7 +193,7 @@ static int pdo_pglite_get_attr(pdo_dbh_t *dbh, zend_long attr, zval *return_valu
 	return EM_ASM_INT({
 		console.log('GET ATTR', $0, $1, $2);
 		return 1;
-	}, handle->dbPtr, attr, return_value);
+	}, &handle->db, attr, return_value);
 }
 
 static void pdo_pglite_request_shutdown(pdo_dbh_t *dbh)
@@ -202,7 +202,7 @@ static void pdo_pglite_request_shutdown(pdo_dbh_t *dbh)
 
 	EM_ASM({
 		console.log('SHUTDOWN', $0);
-	}, handle->dbPtr);
+	}, &handle->db);
 }
 
 static void pdo_pglite_get_gc(pdo_dbh_t *dbh, zend_get_gc_buffer *gc_buffer)
@@ -211,7 +211,7 @@ static void pdo_pglite_get_gc(pdo_dbh_t *dbh, zend_get_gc_buffer *gc_buffer)
 
 	EM_ASM({
 		console.log('GET GC', $0, $1);
-	}, handle->dbPtr, gc_buffer);
+	}, &handle->db, gc_buffer);
 }
 
 static const struct pdo_dbh_methods pdo_pglite_db_methods = {
@@ -233,17 +233,19 @@ static const struct pdo_dbh_methods pdo_pglite_db_methods = {
 	pdo_pglite_get_gc
 };
 
-EM_ASYNC_JS(zval*, pdo_pglite_real_db_handle_factory, (const char *connectionStringPrt), {
+EM_ASYNC_JS(void, pdo_pglite_real_db_handle_factory, (const char *connectionStringPrt, zval* dbZv), {
 	if(!Module.PGlite)
 	{
 		throw new Error("The PGlite class must be provided as a constructor arg to PHP to use PGlite.");
 	}
+	
 	const connectionString = UTF8ToString(connectionStringPrt);
 	const pglite = new Module.PGlite(connectionString
 		? ('idb://' + connectionString)
 		: undefined
 	);
-	return Module.jsToZval(pglite);
+	
+	return Module.jsToZval(pglite, dbZv);
 });
 
 static int pdo_pglite_db_handle_factory(pdo_dbh_t *dbh, zval *driver_options)
@@ -255,7 +257,7 @@ static int pdo_pglite_db_handle_factory(pdo_dbh_t *dbh, zval *driver_options)
 	handle->einfo.errmsg = NULL;
 	dbh->driver_data = handle;
 
-	handle->dbPtr = pdo_pglite_real_db_handle_factory(dbh->data_source);
+	pdo_pglite_real_db_handle_factory(dbh->data_source, &handle->db);
 
 	dbh->methods = &pdo_pglite_db_methods;
 

@@ -12,7 +12,7 @@ static int pdo_pglite_stmt_dtor(pdo_stmt_t *stmt)
 	return 1;
 }
 
-EM_ASYNC_JS(zval*, pdo_pglite_real_stmt_execute, (long targetId, char **error), {
+EM_ASYNC_JS(zval*, pdo_pglite_real_stmt_execute, (long targetId, char **error, zval *rv), {
 	const statement = Module.targets.get(targetId);
 
 	if(!Module.PdoParams.has(statement))
@@ -51,7 +51,9 @@ EM_ASYNC_JS(zval*, pdo_pglite_real_stmt_execute, (long targetId, char **error), 
 			return _row;
 		});
 
-		return Module.jsToZval(mapped);
+		Module.jsToZval(mapped, rv);
+
+		return 1;
 	}
 	catch(exception)
 	{
@@ -78,40 +80,26 @@ static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 	vStmt->done = 0;
 
 	char *error = NULL;
-
-	zval *results = pdo_pglite_real_stmt_execute(vStmt->stmt->targetId, &error);
-
-	if(results)
+	if(!pdo_pglite_real_stmt_execute(vStmt->stmt->targetId, &error, &vStmt->results))
 	{
-		vStmt->results = results;
-		vStmt->row_count = EM_ASM_INT({
+		pdo_pglite_error(stmt->dbh, stmt, 1, "HY000", error, __FILE__, __LINE__);
+		return false;
+	}
 
+	vStmt->row_count = EM_ASM_INT({
+		const results = Module.targets.get($0);
+		if(results) return results.length;
+		return 0;
+
+	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId);
+
+	if(vStmt->row_count)
+	{
+		stmt->column_count = EM_ASM_INT({
 			const results = Module.targets.get($0);
-
-			if(results)
-			{
-				return results.length;
-			}
-
+			if(results.length) return Object.keys(results[0]).length;
 			return 0;
-
-		}, vrzno_fetch_object(Z_OBJ_P(results))->targetId);
-
-		if(vStmt->row_count)
-		{
-			stmt->column_count = EM_ASM_INT({
-
-				const results = Module.targets.get($0);
-
-				if(results.length)
-				{
-					return Object.keys(results[0]).length;
-				}
-
-				return 0;
-
-			}, vrzno_fetch_object(Z_OBJ_P(results))->targetId);
-		}
+		}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId);
 	}
 	else if(error)
 	{
@@ -127,26 +115,26 @@ static int pdo_pglite_stmt_fetch(pdo_stmt_t *stmt, enum pdo_fetch_orientation or
 {
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
-	if(!vStmt->results)
+	if(stmt->executed != 1)
 	{
-		return false;
+		return 0;
 	}
 
-	zval *row = EM_ASM_PTR({
+	int advanced = EM_ASM_INT({
 		const targetId = $0;
 		const target = Module.targets.get(targetId);
 		const current = $1;
 
 		if(current >= target.length)
 		{
-			return null;
+			return false;
 		}
 
-		return Module.jsToZval(target[current]);
+		return true;
 
-	}, vrzno_fetch_object(Z_OBJ_P(vStmt->results))->targetId, vStmt->curr);
+	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId, vStmt->curr);
 
-	if(row)
+	if(advanced)
 	{
 		vStmt->curr++;
 	}
@@ -155,19 +143,19 @@ static int pdo_pglite_stmt_fetch(pdo_stmt_t *stmt, enum pdo_fetch_orientation or
 		vStmt->done = 1;
 	}
 
-	return row;
+	return advanced;
 }
 
 static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 {
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
-	if(colno >= stmt->column_count) {
+	if(colno >= stmt->column_count)
+	{
 		return 0;
 	}
 
 	char *colName = EM_ASM_PTR({
-
 		const results = Module.targets.get($0);
 
 		if(results.length)
@@ -183,7 +171,7 @@ static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 
 		return 0;
 
-	}, vrzno_fetch_object(Z_OBJ_P(vStmt->results))->targetId, colno);
+	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId, colno);
 
 	if(!colName)
 	{
@@ -213,10 +201,11 @@ static int pdo_pglite_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *zv, enum p
 		return 0;
 	}
 
-	zval *jeRet = EM_ASM_PTR({
+	EM_ASM({
 		const results = Module.targets.get($0);
 		const current = -1 + $1;
-		const colno   = $2;
+		const colno = $2;
+		const rv = $3;
 
 		if(current >= results.length)
 		{
@@ -225,20 +214,10 @@ static int pdo_pglite_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *zv, enum p
 
 		const result = results[current];
 		const key = Object.keys(result)[$2];
-		const zval = Module.jsToZval(result[key]);
+		
+		Module.jsToZval(result[key], rv);
 
-		return zval;
-
-	}, vrzno_fetch_object(Z_OBJ_P(vStmt->results))->targetId, vStmt->curr, colno);
-
-	if(!zv)
-	{
-		return 0;
-	}
-
-	ZVAL_COPY(zv, jeRet);
-
-	return 1;
+	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId, vStmt->curr, colno, zv);
 }
 
 static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_data *param, enum pdo_param_event event_type)

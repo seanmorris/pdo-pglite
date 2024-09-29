@@ -24,7 +24,7 @@ typedef struct {
 } pdo_pglite_error_info;
 
 typedef struct {
-	zval *dbPtr;
+	zval db;
 	pdo_pglite_error_info einfo;
 } pdo_pglite_db_handle;
 
@@ -33,9 +33,9 @@ typedef struct {
 	vrzno_object *stmt;
 	unsigned long curr;
 	unsigned long row_count;
-	zval *results;
 	unsigned pre_fetched:1;
 	unsigned done:1;
+	zval results;
 } pdo_pglite_stmt;
 
 #endif
