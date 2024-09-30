@@ -1,17 +1,5 @@
 dnl config.m4 for extension php-pdo-pglite
 
-dnl Comments in this file start with the string 'dnl'.
-dnl Remove where necessary.
-
-dnl If your extension references something external, use 'with':
-
-dnl PHP_ARG_WITH([vrzno],
-dnl   [for vrzno support],
-dnl   [AS_HELP_STRING([--with-vrzno],
-dnl     [Include vrzno support])])
-
-dnl Otherwise use 'enable':
-
 PHP_ARG_ENABLE([pdo_pglite],
   [whether to enable pdo_pglite support],
   [AS_HELP_STRING([--enable-pdo-pglite],
