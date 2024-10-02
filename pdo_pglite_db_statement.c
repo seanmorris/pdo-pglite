@@ -58,13 +58,13 @@ EM_ASYNC_JS(zval*, pdo_pglite_real_stmt_execute, (long targetId, char **error, z
 	catch(exception)
 	{
 		const message = String(exception.message);
-		const len     = lengthBytesUTF8(message) + 1;
-		const strLoc  = _malloc(len);
+		const len = lengthBytesUTF8(message) + 1;
+		const loc = _malloc(len);
 
 		console.error(message, statement.query, exception);
 
-		stringToUTF8(message, strLoc, len);
-		setValue(error, strLoc, '*');
+		stringToUTF8(message, loc, len);
+		setValue(error, loc, '*');
 
 		return 0;
 	}
@@ -160,13 +160,13 @@ static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 
 		if(results.length)
 		{
-			const jsRet = Object.keys(results[0])[$1];
-			const len    = lengthBytesUTF8(jsRet) + 1;
-			const strLoc = _malloc(len);
+			const str = Object.keys(results[0])[$1];
+			const len = lengthBytesUTF8(str) + 1;
+			const loc = _malloc(len);
 
-			stringToUTF8(jsRet, strLoc, len);
+			stringToUTF8(str, loc, len);
 
-			return strLoc;
+			return loc;
 		}
 
 		return 0;
@@ -218,6 +218,8 @@ static int pdo_pglite_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *zv, enum p
 		Module.jsToZval(result[key], rv);
 
 	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId, vStmt->curr, colno, zv);
+
+	return 1;
 }
 
 static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_data *param, enum pdo_param_event event_type)
