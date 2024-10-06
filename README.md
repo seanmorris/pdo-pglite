@@ -6,6 +6,8 @@
 
 ### Join the community: [reddit](https://www.reddit.com/r/phpwasm/) | [discord](https://discord.gg/j8VZzju7gJ) | [php-wasm](https://github.com/seanmorris/php-wasm)
 
+pdo_pglite requires PHP 8.1+
+
 Simply pass the PGlite object into the php-wasm constructor to enable pdo_pglite support:
 
 ```javascript
@@ -51,7 +53,7 @@ php.run(`<?php
     $stm->execute([
         'schema' => 'pg_catalog'
     ]);
-    
+
     $headers = false;
     while ($row = $stm->fetch(PDO::FETCH_ASSOC)) {
         if (!$headers) {
@@ -81,7 +83,7 @@ PGlite can also be used right from static HTML. Just pass it in the `data-import
         $stm->execute([
             'schema' => 'pg_catalog'
         ]);
-        
+
         $headers = false;
         while ($row = $stm->fetch(PDO::FETCH_ASSOC)) {
             if (!$headers) {
@@ -99,7 +101,7 @@ PGlite can also be used right from static HTML. Just pass it in the `data-import
 
 ## @electric-sql/pglite
 
-`pdo_pglite` is powered by [@electric-sql/pglite](https://electric-sql.com/). 
+`pdo_pglite` is powered by [@electric-sql/pglite](https://electric-sql.com/).
 
 https://github.com/electric-sql/pglite
 
