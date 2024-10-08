@@ -41,7 +41,7 @@ EM_ASYNC_JS(zval*, pdo_pglite_real_stmt_execute, (long targetId, char **error, z
 			{
 				if(fields.has(key) && fields.get(key).dataTypeID === 17)
 				{
-					_row[key] = utf8decoder.decode(val);
+					_row[key] = val ? utf8decoder.decode(val) : null;
 					continue;
 				}
 
@@ -214,7 +214,7 @@ static int pdo_pglite_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *zv, enum p
 
 		const result = results[current];
 		const key = Object.keys(result)[$2];
-		
+
 		Module.jsToZval(result[key], rv);
 
 	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId, vStmt->curr, colno, zv);

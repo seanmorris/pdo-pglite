@@ -1,5 +1,4 @@
 dnl config.m4 for extension php-pdo-pglite
-
 if test -z "$SED"; then
   PHP_PGLITE_SED="sed";
 else
