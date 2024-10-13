@@ -228,19 +228,17 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 
 	switch(event_type)
 	{
-		case PDO_PARAM_EVT_FREE:
-			if(param->driver_data)
+		case PDO_PARAM_EVT_ALLOC:
+			if(!stmt->bound_param_map)
 			{
-				efree(param->driver_data);
+				return 1;
+			}
+			if(!zend_hash_index_exists(stmt->bound_param_map, param->paramno))
+			{
+				pdo_pglite_error(stmt->dbh, stmt, 1 + param->paramno, "HY093", "parameter was not defined", __FILE__, __LINE__);
+				return 0;
 			}
 			break;
-
-		case PDO_PARAM_EVT_EXEC_PRE:
-		case PDO_PARAM_EVT_EXEC_POST:
-		case PDO_PARAM_EVT_FETCH_PRE:
-		case PDO_PARAM_EVT_FETCH_POST:
-			/* work is handled by EVT_NORMALIZE */
-			return 1;
 
 		case PDO_PARAM_EVT_NORMALIZE:
 			/* decode name from $1, $2 into 0, 1 etc. */
@@ -266,36 +264,90 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 					}
 				}
 			}
+			break;
 
-			EM_ASM({
-				const stmtTgtId = $0;
-				const paramPtr  = $1;
-				const paramPos  = $2;
-				const statement = Module.targets.get(stmtTgtId);
-				const paramVal  = Module.zvalToJS(paramPtr);
+		case PDO_PARAM_EVT_EXEC_PRE:
+			if(!param->is_param)
+			{
+				break;
+			}
 
-				if(!Module.PdoParams.has(statement))
+			zval *parameter = &param->parameter;
+
+			if(Z_ISREF_P(parameter))
+			{
+				parameter = Z_REFVAL_P(parameter);
+			}
+
+			if(Z_TYPE_P(parameter) == IS_RESOURCE)
+			{
+				php_stream *ps = NULL;
+
+				php_stream_from_zval_no_verify(ps, parameter);
+
+				if(!ps)
 				{
-					Module.PdoParams.set(statement, []);
+					pdo_raise_impl_error(stmt->dbh, stmt, "HY105", "Expected a stream resource");
+					return false;
 				}
 
-				const paramList = Module.PdoParams.get(statement);
+				zend_string *zs =  php_stream_copy_to_mem(ps, PHP_STREAM_COPY_ALL, 0);
+				zval_ptr_dtor(parameter);
+				ZVAL_STR(parameter, zs ? zs : ZSTR_EMPTY_ALLOC());
 
-				paramList[paramPos] = paramVal;
+				char *buffer = ZSTR_VAL(zs);
+				size_t length = ZSTR_LEN(zs);
 
-			}, vStmt->stmt->targetId, param->parameter, param->paramno);
-			break;
-		case PDO_PARAM_EVT_ALLOC:
-			if(!stmt->bound_param_map)
-			{
-				return 1;
+				EM_ASM({
+					const statement = Module.targets.get($0);
+					const start = $1;
+					const length = $2;
+					const paramPos = $3;
+
+					const buffer = new Uint8Array(Module.HEAPU8.buffer.slice(start, start + length));
+
+					if(!Module.PdoParams.has(statement))
+					{
+						Module.PdoParams.set(statement, []);
+					}
+
+					const paramList = Module.PdoParams.get(statement);
+
+					paramList[paramPos] = buffer;
+
+				}, vStmt->stmt->targetId, buffer, length, param->paramno);
 			}
-			if(!zend_hash_index_exists(stmt->bound_param_map, param->paramno))
+			else
 			{
-				pdo_pglite_error(stmt->dbh, stmt, 1 + param->paramno, "HY093", "parameter was not defined", __FILE__, __LINE__);
-				return 0;
+				EM_ASM({
+					const statement = Module.targets.get($0);
+					const paramVal = Module.zvalToJS($1);
+					const paramPos = $2;
+
+					if(!Module.PdoParams.has(statement))
+					{
+						Module.PdoParams.set(statement, []);
+					}
+
+					const paramList = Module.PdoParams.get(statement);
+
+					paramList[paramPos] = paramVal;
+
+				}, vStmt->stmt->targetId, &param->parameter, param->paramno);
 			}
 			break;
+
+		case PDO_PARAM_EVT_FREE:
+			if(param->driver_data)
+			{
+				efree(param->driver_data);
+			}
+			break;
+
+		case PDO_PARAM_EVT_EXEC_POST:
+		case PDO_PARAM_EVT_FETCH_PRE:
+		case PDO_PARAM_EVT_FETCH_POST:
+			return 1;
 	}
 
 	return true;
@@ -303,19 +355,19 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 
 static int pdo_pglite_stmt_get_attribute(pdo_stmt_t *stmt, zend_long attr, zval *val)
 {
-	EM_ASM({ console.log('GET ATTR', $0, $1, $2); }, stmt, attr, val);
+	// EM_ASM({ console.log('GET ATTR', $0, $1, $2); }, stmt, attr, val);
 	return 1;
 }
 
 static int pdo_pglite_stmt_col_meta(pdo_stmt_t *stmt, zend_long colno, zval *return_value)
 {
-	EM_ASM({ console.log('COL META', $0, $1, $2); }, stmt, colno, return_value);
+	// EM_ASM({ console.log('COL META', $0, $1, $2); }, stmt, colno, return_value);
 	return 1;
 }
 
 static int pdo_pglite_stmt_cursor_closer(pdo_stmt_t *stmt)
 {
-	EM_ASM({ console.log('CLOSE', $0, $1, $2); }, stmt);
+	// EM_ASM({ console.log('CLOSE', $0, $1, $2); }, stmt);
 	return 1;
 }
 
