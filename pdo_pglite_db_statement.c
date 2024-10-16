@@ -1,19 +1,24 @@
 static int pdo_pglite_stmt_dtor(pdo_stmt_t *stmt)
 {
+	EM_ASM({ console.log('pdo_pglite_stmt_dtor'); });
+
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	EM_ASM({
+		console.log('Destroying stmt ', $0);
 		const statement = Module.targets.get($0);
 		Module.PdoParams.delete(statement);
-	}, vStmt->stmt->targetId);
+	}, vStmt->stmt);
 
 	efree(vStmt);
 
 	return 1;
 }
 
-EM_ASYNC_JS(zval*, pdo_pglite_real_stmt_execute, (long targetId, char **error, zval *rv), {
+EM_ASYNC_JS(jstarget*, pdo_pglite_real_stmt_execute, (jstarget *targetId, char **error), {
 	const statement = Module.targets.get(targetId);
+
+	console.log({targetId, statement});
 
 	if(!Module.PdoParams.has(statement))
 	{
@@ -51,9 +56,8 @@ EM_ASYNC_JS(zval*, pdo_pglite_real_stmt_execute, (long targetId, char **error, z
 			return _row;
 		});
 
-		Module.jsToZval(mapped, rv);
-
-		return 1;
+		Module.tacked.add(mapped);
+		return Module.targets.add(mapped);
 	}
 	catch(exception)
 	{
@@ -72,6 +76,8 @@ EM_ASYNC_JS(zval*, pdo_pglite_real_stmt_execute, (long targetId, char **error, z
 
 static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 {
+	EM_ASM({ console.log('pdo_pglite_stmt_execute'); });
+
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	stmt->column_count = 0;
@@ -80,7 +86,9 @@ static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 	vStmt->done = 0;
 
 	char *error = NULL;
-	if(!pdo_pglite_real_stmt_execute(vStmt->stmt->targetId, &error, &vStmt->results))
+	vStmt->results = pdo_pglite_real_stmt_execute(vStmt->stmt, &error);
+
+	if(!vStmt->results)
 	{
 		pdo_pglite_error(stmt->dbh, stmt, 1, "HY000", error, __FILE__, __LINE__);
 		return false;
@@ -90,8 +98,7 @@ static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 		const results = Module.targets.get($0);
 		if(results) return results.length;
 		return 0;
-
-	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId);
+	}, vStmt->results);
 
 	if(vStmt->row_count)
 	{
@@ -99,12 +106,7 @@ static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 			const results = Module.targets.get($0);
 			if(results.length) return Object.keys(results[0]).length;
 			return 0;
-		}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId);
-	}
-	else if(error)
-	{
-		pdo_pglite_error(stmt->dbh, stmt, 1, "HY000", error, __FILE__, __LINE__);
-		return false;
+		}, vStmt->results);
 	}
 
 	stmt->executed = 1;
@@ -113,6 +115,8 @@ static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 
 static int pdo_pglite_stmt_fetch(pdo_stmt_t *stmt, enum pdo_fetch_orientation ori, zend_long offset)
 {
+	EM_ASM({ console.log('pdo_pglite_stmt_fetch'); });
+
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	if(stmt->executed != 1)
@@ -132,7 +136,7 @@ static int pdo_pglite_stmt_fetch(pdo_stmt_t *stmt, enum pdo_fetch_orientation or
 
 		return true;
 
-	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId, vStmt->curr);
+	}, vStmt->results, vStmt->curr);
 
 	if(advanced)
 	{
@@ -148,6 +152,8 @@ static int pdo_pglite_stmt_fetch(pdo_stmt_t *stmt, enum pdo_fetch_orientation or
 
 static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 {
+	EM_ASM({ console.log('pdo_pglite_stmt_describe_col'); });
+
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	if(colno >= stmt->column_count)
@@ -171,7 +177,7 @@ static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 
 		return 0;
 
-	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId, colno);
+	}, vStmt->results, colno);
 
 	if(!colName)
 	{
@@ -189,6 +195,8 @@ static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 
 static int pdo_pglite_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *zv, enum pdo_param_type *type)
 {
+	EM_ASM({ console.log('pdo_pglite_stmt_get_col'); });
+
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	if(!vStmt->stmt)
@@ -217,13 +225,15 @@ static int pdo_pglite_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *zv, enum p
 
 		Module.jsToZval(result[key], rv);
 
-	}, vrzno_fetch_object(Z_OBJ(vStmt->results))->targetId, vStmt->curr, colno, zv);
+	}, vStmt->results, vStmt->curr, colno, zv);
 
 	return 1;
 }
 
 static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_data *param, enum pdo_param_event event_type)
 {
+	EM_ASM({ console.log('pdo_pglite_stmt_param_hook'); });
+
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*) stmt->driver_data;
 
 	switch(event_type)
@@ -315,7 +325,7 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 
 					paramList[paramPos] = buffer;
 
-				}, vStmt->stmt->targetId, buffer, length, param->paramno);
+				}, vStmt->stmt, buffer, length, param->paramno);
 			}
 			else
 			{
@@ -333,7 +343,7 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 
 					paramList[paramPos] = paramVal;
 
-				}, vStmt->stmt->targetId, &param->parameter, param->paramno);
+				}, vStmt->stmt, &param->parameter, param->paramno);
 			}
 			break;
 
@@ -355,19 +365,24 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 
 static int pdo_pglite_stmt_get_attribute(pdo_stmt_t *stmt, zend_long attr, zval *val)
 {
-	// EM_ASM({ console.log('GET ATTR', $0, $1, $2); }, stmt, attr, val);
+	EM_ASM({ console.log('pdo_pglite_stmt_get_attribute'); });
+
+	EM_ASM({ console.log('GET ATTR', $0, $1, $2); }, stmt, attr, val);
 	return 1;
 }
 
 static int pdo_pglite_stmt_col_meta(pdo_stmt_t *stmt, zend_long colno, zval *return_value)
 {
-	// EM_ASM({ console.log('COL META', $0, $1, $2); }, stmt, colno, return_value);
+	EM_ASM({ console.log('pdo_pglite_stmt_col_meta'); });
+
+	EM_ASM({ console.log('COL META', $0, $1, $2); }, stmt, colno, return_value);
 	return 1;
 }
 
 static int pdo_pglite_stmt_cursor_closer(pdo_stmt_t *stmt)
 {
-	// EM_ASM({ console.log('CLOSE', $0, $1, $2); }, stmt);
+	EM_ASM({ console.log('pdo_pglite_stmt_cursor_closer'); });
+	EM_ASM({ console.log('CLOSE', $0); }, stmt);
 	return 1;
 }
 

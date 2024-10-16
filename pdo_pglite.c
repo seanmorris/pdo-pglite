@@ -79,18 +79,22 @@ int pdo_pglite_error(
 #include "pdo_pglite_db_statement.c"
 #include "pdo_pglite_db.c"
 
-PHP_RINIT_FUNCTION(pdo_pglite)
-{
-	return SUCCESS;
-}
-
 PHP_MINIT_FUNCTION(pdo_pglite)
 {
 	// REGISTER_INI_ENTRIES();
 #if defined(ZTS) && defined(COMPILE_DL_PDO_PGLITE)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
-	return php_pdo_register_driver(&pdo_pglite_driver);
+
+	php_pdo_register_driver(&pdo_pglite_driver);
+	return SUCCESS;
+}
+
+PHP_MSHUTDOWN_FUNCTION(pdo_pglite)
+{
+	php_pdo_unregister_driver(&pdo_pglite_driver);
+	// UNREGISTER_INI_ENTRIES();
+	return SUCCESS;
 }
 
 PHP_MINFO_FUNCTION(pdo_pglite)
@@ -101,23 +105,22 @@ PHP_MINFO_FUNCTION(pdo_pglite)
 		EM_ASM_INT({ return !!Module.PGlite }) ? "yes" : "no"
 	);
 	php_info_print_table_end();
-
 	// DISPLAY_INI_ENTRIES();
 }
 
-PHP_MSHUTDOWN_FUNCTION(pdo_pglite)
-{
-	// UNREGISTER_INI_ENTRIES();
-	return SUCCESS;
-}
+static const zend_module_dep pdo_pglite_deps[] = {
+	ZEND_MOD_REQUIRED("pdo")
+	ZEND_MOD_END
+};
 
 zend_module_entry pdo_pglite_module_entry = {
-	STANDARD_MODULE_HEADER,
+	STANDARD_MODULE_HEADER_EX, NULL,
+	pdo_pglite_deps,
 	"pdo_pglite",
 	NULL,                      /* zend_function_entry */
 	PHP_MINIT(pdo_pglite),     /* PHP_MINIT - Module initialization */
 	PHP_MSHUTDOWN(pdo_pglite), /* PHP_MSHUTDOWN - Module shutdown */
-	PHP_RINIT(pdo_pglite),     /* PHP_RINIT - Request initialization */
+	NULL,                      /* PHP_RINIT - Request initialization */
 	NULL,                      /* PHP_RSHUTDOWN - Request shutdown */
 	PHP_MINFO(pdo_pglite),     /* PHP_MINFO - Module info */
 	PHP_PDO_PGLITE_VERSION,    /* Version */

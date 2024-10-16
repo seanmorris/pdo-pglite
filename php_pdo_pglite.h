@@ -17,25 +17,25 @@ ZEND_TSRMLS_CACHE_EXTERN()
 
 typedef struct {
 	unsigned int errcode;
-	int sqlstate;
+	char *sqlstate;
 	char *errmsg;
 	const char *file;
 	int line;
 } pdo_pglite_error_info;
 
 typedef struct {
-	zval db;
+	jstarget *dbId;
 	pdo_pglite_error_info einfo;
 } pdo_pglite_db_handle;
 
 typedef struct {
 	pdo_pglite_db_handle *db;
-	vrzno_object *stmt;
 	unsigned long curr;
 	unsigned long row_count;
 	unsigned pre_fetched:1;
 	unsigned done:1;
-	zval results;
+	jstarget *stmt;
+	jstarget *results;
 } pdo_pglite_stmt;
 
 #endif

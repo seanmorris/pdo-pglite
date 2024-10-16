@@ -11,12 +11,24 @@ static void pdo_pglite_handle_closer(pdo_dbh_t *dbh)
 	{
 		pefree(handle->einfo.sqlstate, dbh->is_persistent);
 	}
+
+	EM_ASM({
+		console.log('pdo_pglite_handle_closer DB #' + $0);
+		const db = Module.targets.get($0);
+		// Module.targets.remove(db);
+		Module.tacked.delete(db);
+	}, handle->dbId);
+
+	pefree(handle, dbh->is_persistent);
+	dbh->driver_data = NULL;
 }
 
 static bool pdo_pglite_handle_preparer(pdo_dbh_t *dbh, zend_string *sql, pdo_stmt_t *stmt, zval *driver_options)
 {
+	EM_ASM({ console.log('pdo_pglite_handle_preparer'); });
+
 	pdo_pglite_db_handle *handle = dbh->driver_data;
-	pdo_pglite_stmt *vStmt = emalloc(sizeof(pdo_pglite_stmt)); // @todo: Figure out if we need to clear this.
+	pdo_pglite_stmt *vStmt = emalloc(sizeof(pdo_pglite_stmt));
 
 	zend_string *nsql = NULL;
 
@@ -42,154 +54,162 @@ static bool pdo_pglite_handle_preparer(pdo_dbh_t *dbh, zend_string *sql, pdo_stm
 
 	zval prepared;
 
-	EM_ASM_PTR({
-		const db = Module.zvalToJS($0);
-		const query  = UTF8ToString($1);
-		const supports_placeholders = $2;
-		const zv = $3;
+	vStmt->stmt = (jstarget*) EM_ASM_PTR({
+		const db = Module.targets.get($0);
+		const query = UTF8ToString($1);
+		const zv = $2;
+
+		console.log('Preparing...', query);
 
 		const prepared = (...params) => db.query(query, params);
 		prepared.query = query;
 
-		Module.jsToZval(prepared, zv);
+		Module.tacked.add(prepared);
+		return Module.targets.add(prepared);
 
-	}, &handle->db, sqlString, stmt->supports_placeholders, &prepared);
+	}, handle->dbId, sqlString);
 
-	vStmt->db   = handle;
-	vStmt->stmt = vrzno_fetch_object(Z_OBJ(prepared));
+	vStmt->results = NULL;
+	vStmt->db = handle;
 
 	return true;
 }
 
+// EM_ASYNC_JS(void, pdo_pglite_real_doer, (jstarget *dbId, char *sql), {
+// 	const db = Module.targets.get(dbId);
+// 	await db.query(UTF8ToString(sql));
+// });
+
 static zend_long pdo_pglite_handle_doer(pdo_dbh_t *dbh, const zend_string *sql)
 {
-	pdo_pglite_db_handle *handle = dbh->driver_data;
-	const char *sqlString = ZSTR_VAL(sql);
-
-	return (zend_long) EM_ASM_INT({
-		// console.log('DO', $0, UTF8ToString($1));
-		// const db = Module.zvalToJS($0);
-		// const query  = UTF8ToString($1);
-		return 1;
-
-	}, &handle->db, &sqlString);
+	EM_ASM({ console.log('pdo_pglite_handle_doer'); });
+	// pdo_pglite_db_handle *handle = dbh->driver_data;
+	// const char *sqlString = ZSTR_VAL(sql);
+	// pdo_pglite_real_doer(handle->dbId, sqlString);
+	return 1;
 }
 
 static zend_string *pdo_pglite_handle_quoter(pdo_dbh_t *dbh, const zend_string *unquoted, enum pdo_param_type paramtype)
 {
-	// pdo_pglite_db_handle *handle = dbh->driver_data;
+	EM_ASM({ console.log('pdo_pglite_handle_quoter'); });
 	const char *unquotedChar = ZSTR_VAL(unquoted);
 	zend_string *quoted = zend_string_init(unquotedChar, strlen(unquotedChar), 0);
 	return quoted;
 }
 
-EM_ASYNC_JS(int, pdo_pglite_real_handle_begin, (zval *dbPtr), {
-	const db = Module.zvalToJS(dbPtr);
+EM_ASYNC_JS(void, pdo_pglite_real_handle_begin, (jstarget *dbId), {
+	console.log('BEGIN');
+	const db = Module.targets.get(dbId);
 	await db.query('BEGIN');
 });
 
 static bool pdo_pglite_handle_begin(pdo_dbh_t *dbh)
 {
 	pdo_pglite_db_handle *handle = dbh->driver_data;
-	pdo_pglite_real_handle_begin(&handle->db);
+	pdo_pglite_real_handle_begin(handle->dbId);
 	return 1;
 }
 
-EM_ASYNC_JS(int, pdo_pglite_real_handle_commit, (zval *dbPtr), {
-	const db = Module.zvalToJS(dbPtr);
+EM_ASYNC_JS(void, pdo_pglite_real_handle_commit, (jstarget *dbId), {
+	console.log('COMMIT');
+	const db = Module.targets.get(dbId);
 	await db.query('COMMIT');
 });
 
 static bool pdo_pglite_handle_commit(pdo_dbh_t *dbh)
 {
 	pdo_pglite_db_handle *handle = dbh->driver_data;
-	pdo_pglite_real_handle_commit(&handle->db);
+	pdo_pglite_real_handle_commit(&handle->dbId);
 	return 1;
 }
 
-EM_ASYNC_JS(int, pdo_pglite_real_handle_rollback, (zval *dbPtr), {
-	const db = Module.zvalToJS(dbPtr);
+EM_ASYNC_JS(void, pdo_pglite_real_handle_rollback, (jstarget *dbId), {
+	console.log('ROLLBACK');
+	const db = Module.targets.get(dbId);
 	await db.query('ROLLBACK');
 });
 
 static bool pdo_pglite_handle_rollback(pdo_dbh_t *dbh)
 {
 	pdo_pglite_db_handle *handle = dbh->driver_data;
-	pdo_pglite_real_handle_rollback(&handle->db);
+	pdo_pglite_real_handle_rollback(handle->dbId);
 	return 1;
 }
 
 static bool pdo_pglite_set_attr(pdo_dbh_t *dbh, zend_long attr, zval *val)
 {
+	EM_ASM({ console.log('pdo_pglite_set_attr'); });
 	pdo_pglite_db_handle *handle = dbh->driver_data;
 
 	return (bool) EM_ASM_INT({
 		console.log('SET ATTR', $1, $2);
 		return true;
-	}, &handle->db, attr, val);
+	}, handle->dbId, attr, val);
 }
 
-EM_ASYNC_JS(uint32_t, pdo_pglite_real_last_insert_id, (zval *dbPtr, const char *namePtr, char *errorPtr), {
-	try
-	{
-		const db = Module.zvalToJS(dbPtr);
-		if(namePtr)
-		{
-			const name = UTF8ToString(namePtr);
-			console.log('SELECT CURRVAL($1)', name);
-			const result = await db.query('SELECT CURRVAL($1)', name);
-			console.log(result);
-			// return result;
-		}
-		else
-		{
-			console.log('SELECT LASTVAL()');
-			const result = await db.query('SELECT LASTVAL()');
-			console.log(result);
-			// return result;
-		}
-	}
-	catch(error)
-	{
-		console.error(error);
-		const str = String(error);
-		const len = lengthBytesUTF8(str);
-		const loc = _malloc(len);
-		stringToUTF8(str, loc, len);
-		setValue(errorPtr, loc, '*');
-	}
+// EM_ASYNC_JS(uint32_t, pdo_pglite_real_last_insert_id, (jstarget *dbId, const char *namePtr, char *errorPtr), {
+// 	try
+// 	{
+// 		const db = Module.targets.get(dbId);
+// 		if(namePtr)
+// 		{
+// 			const name = UTF8ToString(namePtr);
+// 			console.log('SELECT CURRVAL($1)', name);
+// 			const result = await db.query('SELECT CURRVAL($1)', name);
+// 			console.log(result);
+// 			// return result;
+// 		}
+// 		else
+// 		{
+// 			console.log('SELECT LASTVAL()');
+// 			const result = await db.query('SELECT LASTVAL()');
+// 			console.log(result);
+// 			// return result;
+// 		}
+// 	}
+// 	catch(error)
+// 	{
+// 		console.error(error);
+// 		const str = String(error);
+// 		const len = lengthBytesUTF8(str);
+// 		const loc = _malloc(len);
+// 		stringToUTF8(str, loc, len);
+// 		setValue(errorPtr, loc, '*');
+// 	}
 
-	return 0;
-});
+// 	return 0;
+// });
 
-static zend_string *pdo_pglite_last_insert_id(pdo_dbh_t *dbh, const zend_string *name)
-{
-	pdo_pglite_db_handle *handle = dbh->driver_data;
-	const char *nameStr = NULL;
+// static zend_string *pdo_pglite_last_insert_id(pdo_dbh_t *dbh, const zend_string *name)
+// {
+// 	pdo_pglite_db_handle *handle = dbh->driver_data;
+// 	const char *nameStr = NULL;
 
-	if(name != NULL)
-	{
-		nameStr = ZSTR_VAL(name);
-	}
+// 	if(name != NULL)
+// 	{
+// 		nameStr = ZSTR_VAL(name);
+// 	}
 
-	char *error;
-	uint32_t lastId = pdo_pglite_real_last_insert_id(&handle->db, nameStr, error);
+// 	char *error;
+// 	uint32_t lastId = pdo_pglite_real_last_insert_id(handle->dbId, nameStr, error);
 
-	if(error)
-	{
-		pdo_pglite_error(dbh, NULL, 1, "HY000", error, __FILE__, __LINE__);
-		return 0;
-	}
+// 	if(error)
+// 	{
+// 		pdo_pglite_error(dbh, NULL, 1, "HY000", error, __FILE__, __LINE__);
+// 		return 0;
+// 	}
 
-#if PHP_MAJOR_VERSION >= 8 && PHP_MINOR_VERSION >= 1
-	return zend_ulong_to_str((zend_ulong)lastId);
-#else
-	return zend_long_to_str((zend_long)lastId);
-#endif
-}
+// #if PHP_MAJOR_VERSION >= 8 && PHP_MINOR_VERSION >= 1
+// 	return zend_ulong_to_str((zend_ulong)lastId);
+// #else
+// 	return zend_long_to_str((zend_long)lastId);
+// #endif
+// }
 
 static void pdo_pglite_fetch_error_func(pdo_dbh_t *dbh, pdo_stmt_t *stmt, zval *info)
 {
+	EM_ASM({ console.log('pdo_pglite_fetch_error_func'); });
+
 	pdo_pglite_db_handle *handle = dbh->driver_data;
 
 	if(handle->einfo.errcode)
@@ -207,35 +227,15 @@ static void pdo_pglite_fetch_error_func(pdo_dbh_t *dbh, pdo_stmt_t *stmt, zval *
 	}
 }
 
-static int pdo_pglite_get_attr(pdo_dbh_t *dbh, zend_long attr, zval *return_value)
-{
-	pdo_pglite_db_handle *handle = dbh->driver_data;
-
-	return EM_ASM_INT({
-		// const db = Module.zvalToJS($0);
-		console.log('GET ATTR', $1, $2);
-		return 1;
-	}, &handle->db, attr);
-}
-
 static void pdo_pglite_request_shutdown(pdo_dbh_t *dbh)
 {
+	EM_ASM({ console.log('pdo_pglite_request_shutdown'); });
 	pdo_pglite_db_handle *handle = dbh->driver_data;
 
 	EM_ASM({
-		const db = Module.zvalToJS($0);
+		const db = Module.targets.get($0);
 		console.log('SHUTDOWN');
-	}, &handle->db);
-}
-
-static void pdo_pglite_get_gc(pdo_dbh_t *dbh, zend_get_gc_buffer *gc_buffer)
-{
-	pdo_pglite_db_handle *handle = dbh->driver_data;
-
-	EM_ASM({
-		// const db = Module.zvalToJS($0);
-		console.log('GET GC', $1);
-	}, &handle->db, gc_buffer);
+	}, handle->dbId);
 }
 
 static const struct pdo_dbh_methods pdo_pglite_db_methods = {
@@ -247,43 +247,40 @@ static const struct pdo_dbh_methods pdo_pglite_db_methods = {
 	pdo_pglite_handle_commit,
 	pdo_pglite_handle_rollback,
 	pdo_pglite_set_attr,
-	pdo_pglite_last_insert_id,
+	NULL,  //pdo_pglite_last_insert_id,
 	pdo_pglite_fetch_error_func,
-	pdo_pglite_get_attr,
+	NULL,  //pdo_pglite_get_attr,
 	NULL,  /* check_liveness: not needed */
 	NULL,  //get_driver_methods,
 	pdo_pglite_request_shutdown,
 	NULL,  /* in transaction, use PDO's internal tracking mechanism */
-	pdo_pglite_get_gc
+	NULL   /* get_gc */
 };
-
-EM_ASYNC_JS(void, pdo_pglite_real_db_handle_factory, (const char *connectionStringPrt, zval* dbZv), {
-	if(!Module.PGlite)
-	{
-		throw new Error("The PGlite class must be provided as a constructor arg to PHP to use PGlite.");
-	}
-
-	const connectionString = UTF8ToString(connectionStringPrt);
-	const pglite = new Module.PGlite(connectionString
-		? ('idb://' + connectionString)
-		: undefined
-	);
-
-	return Module.jsToZval(pglite, dbZv);
-});
 
 static int pdo_pglite_db_handle_factory(pdo_dbh_t *dbh, zval *driver_options)
 {
+	EM_ASM({ console.log('pdo_pglite_db_handle_factory'); });
+
 	pdo_pglite_db_handle *handle;
 	handle = pecalloc(1, sizeof(pdo_pglite_db_handle), dbh->is_persistent);
 
+	dbh->driver_data = handle;
+	dbh->methods = &pdo_pglite_db_methods;
+
 	handle->einfo.errcode = 0;
 	handle->einfo.errmsg = NULL;
-	dbh->driver_data = handle;
+	handle->dbId = (jstarget*) EM_ASM_PTR({
+		if(!Module.PGlite)
+		{
+			throw new Error("The PGlite class must be provided as a constructor arg to PHP to use PGlite.");
+		}
 
-	pdo_pglite_real_db_handle_factory(dbh->data_source, &handle->db);
+		const data_source = UTF8ToString($0);
+		const pglite = new Module.PGlite(data_source ? ('idb://' + data_source): undefined);
 
-	dbh->methods = &pdo_pglite_db_methods;
+		Module.tacked.add(pglite);
+		return Module.targets.add(pglite);
+	}, dbh->data_source);
 
 	return 1;
 }
