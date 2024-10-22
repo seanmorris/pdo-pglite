@@ -1,11 +1,8 @@
 static int pdo_pglite_stmt_dtor(pdo_stmt_t *stmt)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_dtor'); });
-
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	EM_ASM({
-		console.log('Destroying stmt ', $0);
 		const statement = Module.targets.get($0);
 		Module.PdoParams.delete(statement);
 	}, vStmt->stmt);
@@ -17,8 +14,6 @@ static int pdo_pglite_stmt_dtor(pdo_stmt_t *stmt)
 
 EM_ASYNC_JS(jstarget*, pdo_pglite_real_stmt_execute, (jstarget *targetId, char **error), {
 	const statement = Module.targets.get(targetId);
-
-	console.log({targetId, statement});
 
 	if(!Module.PdoParams.has(statement))
 	{
@@ -76,8 +71,6 @@ EM_ASYNC_JS(jstarget*, pdo_pglite_real_stmt_execute, (jstarget *targetId, char *
 
 static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_execute'); });
-
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	stmt->column_count = 0;
@@ -115,8 +108,6 @@ static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 
 static int pdo_pglite_stmt_fetch(pdo_stmt_t *stmt, enum pdo_fetch_orientation ori, zend_long offset)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_fetch'); });
-
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	if(stmt->executed != 1)
@@ -152,8 +143,6 @@ static int pdo_pglite_stmt_fetch(pdo_stmt_t *stmt, enum pdo_fetch_orientation or
 
 static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_describe_col'); });
-
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	if(colno >= stmt->column_count)
@@ -195,8 +184,6 @@ static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 
 static int pdo_pglite_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *zv, enum pdo_param_type *type)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_get_col'); });
-
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
 
 	if(!vStmt->stmt)
@@ -232,8 +219,6 @@ static int pdo_pglite_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *zv, enum p
 
 static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_data *param, enum pdo_param_event event_type)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_param_hook'); });
-
 	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*) stmt->driver_data;
 
 	switch(event_type)
@@ -365,24 +350,19 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 
 static int pdo_pglite_stmt_get_attribute(pdo_stmt_t *stmt, zend_long attr, zval *val)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_get_attribute'); });
-
-	EM_ASM({ console.log('GET ATTR', $0, $1, $2); }, stmt, attr, val);
+	EM_ASM({ console.log('pdo_pglite_stmt_get_attribute', $0, $1, $2); }, stmt, attr, val);
 	return 1;
 }
 
 static int pdo_pglite_stmt_col_meta(pdo_stmt_t *stmt, zend_long colno, zval *return_value)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_col_meta'); });
-
-	EM_ASM({ console.log('COL META', $0, $1, $2); }, stmt, colno, return_value);
+	EM_ASM({ console.log('pdo_pglite_stmt_col_meta', $0, $1, $2); }, stmt, colno, return_value);
 	return 1;
 }
 
 static int pdo_pglite_stmt_cursor_closer(pdo_stmt_t *stmt)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_cursor_closer'); });
-	EM_ASM({ console.log('CLOSE', $0); }, stmt);
+	EM_ASM({ console.log('pdo_pglite_stmt_cursor_closer', $0); }, stmt);
 	return 1;
 }
 
