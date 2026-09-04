@@ -28,6 +28,32 @@
 	ZEND_PARSE_PARAMETERS_END()
 #endif
 
+static void pdo_pglite_clear_error_info(pdo_dbh_t *dbh)
+{
+	pdo_pglite_db_handle *handle = (pdo_pglite_db_handle*) dbh->driver_data;
+
+	if(!handle)
+	{
+		return;
+	}
+
+	if(handle->einfo.errmsg)
+	{
+		pefree(handle->einfo.errmsg, dbh->is_persistent);
+		handle->einfo.errmsg = NULL;
+	}
+
+	if(handle->einfo.sqlstate)
+	{
+		pefree(handle->einfo.sqlstate, dbh->is_persistent);
+		handle->einfo.sqlstate = NULL;
+	}
+
+	handle->einfo.errcode = 0;
+	handle->einfo.file = NULL;
+	handle->einfo.line = 0;
+}
+
 int pdo_pglite_error(
 	pdo_dbh_t *dbh,
 	pdo_stmt_t *stmt,
@@ -39,7 +65,14 @@ int pdo_pglite_error(
 ){
 	pdo_pglite_db_handle *handle = (pdo_pglite_db_handle*) dbh->driver_data;
 	pdo_error_type *pdo_err = stmt ? &stmt->error_code : &dbh->error_code;
-	// pdo_pglite_error_info *einfo = &handle->einfo;
+	const char *normalized_sqlstate = sqlstate;
+
+	pdo_pglite_clear_error_info(dbh);
+
+	if(normalized_sqlstate == NULL || strlen(normalized_sqlstate) != sizeof(pdo_error_type) - 1)
+	{
+		normalized_sqlstate = "HY000";
+	}
 
 	handle->einfo.errcode = errcode;
 	handle->einfo.file = file;
@@ -50,26 +83,60 @@ int pdo_pglite_error(
 		handle->einfo.errmsg = pestrdup(errmsg, dbh->is_persistent);
 	}
 
-	if(sqlstate)
-	{
-		handle->einfo.sqlstate = pestrdup(sqlstate, dbh->is_persistent);
-	}
-
-	if(sqlstate == NULL || strlen(sqlstate) >= sizeof(pdo_error_type))
-	{
-		strcpy(*pdo_err, "HY000");
-	}
-	else
-	{
-		strcpy(*pdo_err, sqlstate);
-	}
+	handle->einfo.sqlstate = pestrdup(normalized_sqlstate, dbh->is_persistent);
+	strcpy(*pdo_err, normalized_sqlstate);
 
 	if(!dbh->methods)
 	{
-		pdo_throw_exception(handle->einfo.errcode, handle->einfo.errmsg, pdo_err);
+		pdo_throw_exception(
+			handle->einfo.errcode,
+			handle->einfo.errmsg ? handle->einfo.errmsg : "PGlite operation failed",
+			pdo_err
+		);
 	}
 
 	return errcode;
+}
+
+void EMSCRIPTEN_KEEPALIVE pdo_pglite_create_string(const char *value, size_t length, zval *return_value)
+{
+	if(length)
+	{
+		ZVAL_STRINGL(return_value, value, length);
+	}
+	else
+	{
+		ZVAL_EMPTY_STRING(return_value);
+	}
+}
+
+static void pdo_pglite_report_bridge_error(
+	pdo_dbh_t *dbh,
+	pdo_stmt_t *stmt,
+	char *message,
+	char *sqlstate,
+	const char *file,
+	int line
+){
+	pdo_pglite_error(
+		dbh,
+		stmt,
+		1,
+		sqlstate ? sqlstate : "HY000",
+		message ? message : "PGlite operation failed",
+		file,
+		line
+	);
+
+	if(message)
+	{
+		free(message);
+	}
+
+	if(sqlstate)
+	{
+		free(sqlstate);
+	}
 }
 
 // PHP_INI_BEGIN()
@@ -86,8 +153,7 @@ PHP_MINIT_FUNCTION(pdo_pglite)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
 
-	php_pdo_register_driver(&pdo_pglite_driver);
-	return SUCCESS;
+	return php_pdo_register_driver(&pdo_pglite_driver);
 }
 
 PHP_MSHUTDOWN_FUNCTION(pdo_pglite)
@@ -110,6 +176,7 @@ PHP_MINFO_FUNCTION(pdo_pglite)
 
 static const zend_module_dep pdo_pglite_deps[] = {
 	ZEND_MOD_REQUIRED("pdo")
+	ZEND_MOD_REQUIRED("vrzno")
 	ZEND_MOD_END
 };
 

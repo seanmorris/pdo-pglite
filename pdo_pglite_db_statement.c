@@ -1,225 +1,321 @@
-static int pdo_pglite_stmt_dtor(pdo_stmt_t *stmt)
+static void pdo_pglite_release_target(jstarget **target_id)
 {
-	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
+	if(!target_id || !*target_id)
+	{
+		return;
+	}
 
 	EM_ASM({
-		const statement = Module.targets.get($0);
-		Module.PdoParams.delete(statement);
-	}, vStmt->stmt);
+		const targetId = $0;
+		const target = Module.targets.get(targetId);
 
-	efree(vStmt);
+		if(target)
+		{
+			Module.tacked.delete(target);
+		}
+
+		Module.targets.remove(targetId);
+	}, *target_id);
+
+	*target_id = NULL;
+}
+
+static int pdo_pglite_stmt_dtor(pdo_stmt_t *stmt)
+{
+	pdo_pglite_stmt *pglite_stmt = (pdo_pglite_stmt*) stmt->driver_data;
+
+	if(!pglite_stmt)
+	{
+		return 1;
+	}
+
+	if(pglite_stmt->stmt)
+	{
+		EM_ASM({
+			const statement = Module.targets.get($0);
+
+			if(statement)
+			{
+				Module.PdoParams.delete(statement);
+			}
+		}, pglite_stmt->stmt);
+	}
+
+	pdo_pglite_release_target(&pglite_stmt->results);
+	pdo_pglite_release_target(&pglite_stmt->stmt);
+
+	efree(pglite_stmt);
+	stmt->driver_data = NULL;
 
 	return 1;
 }
 
-EM_ASYNC_JS(jstarget*, pdo_pglite_real_stmt_execute, (jstarget *targetId, char **error), {
+EM_ASYNC_JS(jstarget*, pdo_pglite_real_stmt_execute, (
+	jstarget *targetId,
+	char **errorPtr,
+	char **sqlstatePtr
+), {
+	const writeError = exception => {
+		const message = exception && exception.message
+			? String(exception.message)
+			: String(exception);
+		const state = exception && typeof exception.code === 'string'
+			&& /^[0-9A-Z]{5}$/.test(exception.code)
+			? exception.code
+			: 'HY000';
+		const messageLength = lengthBytesUTF8(message) + 1;
+		const stateLength = lengthBytesUTF8(state) + 1;
+		const messageLocation = _malloc(messageLength);
+		const stateLocation = _malloc(stateLength);
+
+		stringToUTF8(message, messageLocation, messageLength);
+		stringToUTF8(state, stateLocation, stateLength);
+		setValue(errorPtr, messageLocation, '*');
+		setValue(sqlstatePtr, stateLocation, '*');
+	};
+
 	const statement = Module.targets.get(targetId);
+	const params = statement && Module.PdoParams.has(statement)
+		? Module.PdoParams.get(statement)
+		: [];
 
-	if(!Module.PdoParams.has(statement))
+	if(statement)
 	{
-		Module.PdoParams.set(statement, []);
+		Module.PdoParams.delete(statement);
 	}
-
-	const params = Module.PdoParams.get(statement);
 
 	try
 	{
+		if(!statement)
+		{
+			throw new Error('The PGlite statement handle is no longer available.');
+		}
+
 		const result = await statement(...params);
-		const rows = result.rows ?? [];
-		const _fields = result.fields ?? [];
-		const fields = new Map;
+		const normalized = {};
+		normalized.rows = Array.isArray(result.rows) ? result.rows : [];
+		normalized.fields = Array.isArray(result.fields) ? result.fields : [];
+		normalized.affectedRows = Number(result.affectedRows ?? result.rowCount ?? 0);
 
-		_fields.forEach(field => {
-			fields.set(field.name, field);
-		});
-
-		const utf8decoder = new TextDecoder();
-
-		const mapped = rows.map(row => {
-			const _row = {};
-			for(const [key, val] of Object.entries(row))
-			{
-				if(fields.has(key) && fields.get(key).dataTypeID === 17)
-				{
-					_row[key] = val ? utf8decoder.decode(val) : null;
-					continue;
-				}
-
-				_row[key] = val;
-			}
-
-			return _row;
-		});
-
-		Module.tacked.add(mapped);
-		return Module.targets.add(mapped);
+		Module.tacked.add(normalized);
+		return Module.targets.add(normalized);
 	}
 	catch(exception)
 	{
-		const message = String(exception.message);
-		const len = lengthBytesUTF8(message) + 1;
-		const loc = _malloc(len);
-
-		console.error(message, statement.query, exception);
-
-		stringToUTF8(message, loc, len);
-		setValue(error, loc, '*');
-
+		writeError(exception);
 		return 0;
 	}
 });
 
 static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 {
-	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
-
-	stmt->column_count = 0;
-	vStmt->row_count = 0;
-	vStmt->curr = 0;
-	vStmt->done = 0;
-
+	pdo_pglite_stmt *pglite_stmt = (pdo_pglite_stmt*) stmt->driver_data;
 	char *error = NULL;
-	vStmt->results = pdo_pglite_real_stmt_execute(vStmt->stmt, &error);
+	char *sqlstate = NULL;
+	int column_count;
 
-	if(!vStmt->results)
+	php_pdo_stmt_set_column_count(stmt, 0);
+	stmt->row_count = 0;
+	pglite_stmt->row_count = 0;
+	pglite_stmt->curr = 0;
+	pglite_stmt->done = 0;
+
+	pdo_pglite_release_target(&pglite_stmt->results);
+
+	pglite_stmt->results = pdo_pglite_real_stmt_execute(
+		pglite_stmt->stmt,
+		&error,
+		&sqlstate
+	);
+
+	if(!pglite_stmt->results)
 	{
-		pdo_pglite_error(stmt->dbh, stmt, 1, "HY000", error, __FILE__, __LINE__);
+		pdo_pglite_report_bridge_error(stmt->dbh, stmt, error, sqlstate, __FILE__, __LINE__);
 		return false;
 	}
 
-	vStmt->row_count = EM_ASM_INT({
-		const results = Module.targets.get($0);
-		if(results) return results.length;
-		return 0;
-	}, vStmt->results);
+	pglite_stmt->row_count = (zend_long) EM_ASM_INT({
+		const result = Module.targets.get($0);
+		return result && Array.isArray(result.rows) ? result.rows.length : 0;
+	}, pglite_stmt->results);
 
-	if(vStmt->row_count)
-	{
-		stmt->column_count = EM_ASM_INT({
-			const results = Module.targets.get($0);
-			if(results.length) return Object.keys(results[0]).length;
+	column_count = EM_ASM_INT({
+		const result = Module.targets.get($0);
+		return result && Array.isArray(result.fields) ? result.fields.length : 0;
+	}, pglite_stmt->results);
+
+	php_pdo_stmt_set_column_count(stmt, column_count);
+
+	stmt->row_count = (zend_long) EM_ASM_INT({
+		const result = Module.targets.get($0);
+
+		if(!result)
+		{
 			return 0;
-		}, vStmt->results);
-	}
+		}
 
-	stmt->executed = 1;
+		return result.fields.length
+			? result.rows.length
+			: result.affectedRows;
+	}, pglite_stmt->results);
+
 	return true;
 }
 
-static int pdo_pglite_stmt_fetch(pdo_stmt_t *stmt, enum pdo_fetch_orientation ori, zend_long offset)
-{
-	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
+static int pdo_pglite_stmt_fetch(
+	pdo_stmt_t *stmt,
+	enum pdo_fetch_orientation orientation,
+	zend_long offset
+){
+	pdo_pglite_stmt *pglite_stmt = (pdo_pglite_stmt*) stmt->driver_data;
 
-	if(stmt->executed != 1)
+	(void) offset;
+
+	if(orientation != PDO_FETCH_ORI_NEXT || !stmt->executed || !pglite_stmt->results)
 	{
 		return 0;
 	}
 
-	int advanced = EM_ASM_INT({
-		const targetId = $0;
-		const target = Module.targets.get(targetId);
-		const current = $1;
-
-		if(current >= target.length)
-		{
-			return false;
-		}
-
-		return true;
-
-	}, vStmt->results, vStmt->curr);
-
-	if(advanced)
+	if(pglite_stmt->curr >= pglite_stmt->row_count)
 	{
-		vStmt->curr++;
-	}
-	else
-	{
-		vStmt->done = 1;
+		pglite_stmt->done = 1;
+		return 0;
 	}
 
-	return advanced;
+	pglite_stmt->curr++;
+	return 1;
 }
 
 static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 {
-	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
+	pdo_pglite_stmt *pglite_stmt = (pdo_pglite_stmt*) stmt->driver_data;
+	char *column_name;
 
-	if(colno >= stmt->column_count)
+	if(!pglite_stmt->results || colno < 0 || colno >= stmt->column_count)
 	{
 		return 0;
 	}
 
-	char *colName = EM_ASM_PTR({
-		const results = Module.targets.get($0);
+	column_name = (char*) EM_ASM_PTR({
+		const result = Module.targets.get($0);
+		const field = result && result.fields ? result.fields[$1] : null;
 
-		if(results.length)
+		if(!field || typeof field.name !== 'string')
 		{
-			const str = Object.keys(results[0])[$1];
-			const len = lengthBytesUTF8(str) + 1;
-			const loc = _malloc(len);
-
-			stringToUTF8(str, loc, len);
-
-			return loc;
+			return 0;
 		}
 
-		return 0;
+		const length = lengthBytesUTF8(field.name) + 1;
+		const location = _malloc(length);
 
-	}, vStmt->results, colno);
+		stringToUTF8(field.name, location, length);
+		return location;
+	}, pglite_stmt->results, colno);
 
-	if(!colName)
+	if(!column_name)
 	{
 		return 0;
 	}
 
-	stmt->columns[colno].name = zend_string_init(colName, strlen(colName), 0);
+	stmt->columns[colno].name = zend_string_init(column_name, strlen(column_name), false);
 	stmt->columns[colno].maxlen = SIZE_MAX;
 	stmt->columns[colno].precision = 0;
 
-	free(colName);
+	free(column_name);
 
 	return 1;
 }
 
-static int pdo_pglite_stmt_get_col(pdo_stmt_t *stmt, int colno, zval *zv, enum pdo_param_type *type)
-{
-	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*)stmt->driver_data;
+static int pdo_pglite_stmt_get_col(
+	pdo_stmt_t *stmt,
+	int colno,
+	zval *return_value,
+	enum pdo_param_type *type
+){
+	pdo_pglite_stmt *pglite_stmt = (pdo_pglite_stmt*) stmt->driver_data;
 
-	if(!vStmt->stmt)
+	(void) type;
+
+	if(!pglite_stmt->results || colno < 0 || colno >= stmt->column_count)
 	{
 		return 0;
 	}
 
-	if(colno >= stmt->column_count)
-	{
-		return 0;
-	}
+	return EM_ASM_INT({
+		const result = Module.targets.get($0);
+		const current = $1 - 1;
+		const column = $2;
+		const returnValue = $3;
 
-	EM_ASM({
-		const results = Module.targets.get($0);
-		const current = -1 + $1;
-		const colno = $2;
-		const rv = $3;
-
-		if(current >= results.length)
+		if(!result || current < 0 || current >= result.rows.length)
 		{
-			return null;
+			return 0;
 		}
 
-		const result = results[current];
-		const key = Object.keys(result)[$2];
+		const value = result.rows[current][column];
+		const field = result.fields[column];
 
-		Module.jsToZval(result[key], rv);
+		if(field && field.dataTypeID === 17 && value !== null)
+		{
+			const bytes = value instanceof Uint8Array
+				? value
+				: new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+			const location = bytes.byteLength ? _malloc(bytes.byteLength) : 0;
 
-	}, vStmt->results, vStmt->curr, colno, zv);
+			if(bytes.byteLength)
+			{
+				Module.HEAPU8.set(bytes, location);
+			}
 
-	return 1;
+			Module.ccall(
+				'pdo_pglite_create_string',
+				null,
+				['number', 'number', 'number'],
+				[location, bytes.byteLength, returnValue]
+			);
+
+			if(location)
+			{
+				_free(location);
+			}
+
+			return 1;
+		}
+
+		if(typeof value === 'bigint' || (typeof value === 'number' && !Number.isFinite(value)))
+		{
+			Module.jsToZval(String(value), returnValue);
+			return 1;
+		}
+
+		if(value instanceof Date)
+		{
+			Module.jsToZval(value.toISOString(), returnValue);
+			return 1;
+		}
+
+		if(value && typeof value === 'object')
+		{
+			Module.jsToZval(JSON.stringify(value), returnValue);
+			return 1;
+		}
+
+		Module.jsToZval(value, returnValue);
+		return 1;
+	}, pglite_stmt->results, pglite_stmt->curr, colno, return_value);
 }
 
-static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_data *param, enum pdo_param_event event_type)
-{
-	pdo_pglite_stmt *vStmt = (pdo_pglite_stmt*) stmt->driver_data;
+static int pdo_pglite_stmt_param_hook(
+	pdo_stmt_t *stmt,
+	struct pdo_bound_param_data *param,
+	enum pdo_param_event event_type
+){
+	pdo_pglite_stmt *pglite_stmt = (pdo_pglite_stmt*) stmt->driver_data;
+
+	if(!param->is_param)
+	{
+		return 1;
+	}
 
 	switch(event_type)
 	{
@@ -228,15 +324,23 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 			{
 				return 1;
 			}
+
 			if(!zend_hash_index_exists(stmt->bound_param_map, param->paramno))
 			{
-				pdo_pglite_error(stmt->dbh, stmt, 1 + param->paramno, "HY093", "parameter was not defined", __FILE__, __LINE__);
+				pdo_pglite_error(
+					stmt->dbh,
+					stmt,
+					1 + param->paramno,
+					"HY093",
+					"parameter was not defined",
+					__FILE__,
+					__LINE__
+				);
 				return 0;
 			}
 			break;
 
 		case PDO_PARAM_EVT_NORMALIZE:
-			/* decode name from $1, $2 into 0, 1 etc. */
 			if(param->name)
 			{
 				if(ZSTR_VAL(param->name)[0] == '$')
@@ -245,28 +349,31 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 				}
 				else
 				{
-					/* resolve parameter name to rewritten name */
-					zend_string *namevar;
+					zend_string *rewritten_name = stmt->bound_param_map
+						? zend_hash_find_ptr(stmt->bound_param_map, param->name)
+						: NULL;
 
-					if(stmt->bound_param_map && (namevar = zend_hash_find_ptr(stmt->bound_param_map, param->name)) != NULL)
+					if(!rewritten_name)
 					{
-						param->paramno = -1 + ZEND_ATOL(ZSTR_VAL(namevar) + 1);
-					}
-					else
-					{
-						pdo_pglite_error(stmt->dbh, stmt, 1 + param->paramno, "HY093", ZSTR_VAL(param->name), __FILE__, __LINE__);
+						pdo_pglite_error(
+							stmt->dbh,
+							stmt,
+							1,
+							"HY093",
+							"parameter was not defined",
+							__FILE__,
+							__LINE__
+						);
 						return 0;
 					}
+
+					param->paramno = ZEND_ATOL(ZSTR_VAL(rewritten_name) + 1) - 1;
 				}
 			}
 			break;
 
 		case PDO_PARAM_EVT_EXEC_PRE:
-			if(!param->is_param)
-			{
-				break;
-			}
-
+		{
 			zval *parameter = &param->parameter;
 
 			if(Z_ISREF_P(parameter))
@@ -274,68 +381,81 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 				parameter = Z_REFVAL_P(parameter);
 			}
 
+			if(PDO_PARAM_TYPE(param->param_type) == PDO_PARAM_NULL || Z_TYPE_P(parameter) == IS_NULL)
+			{
+				EM_ASM({
+					const statement = Module.targets.get($0);
+					const paramPosition = $1;
+					const params = Module.PdoParams.get(statement) || [];
+
+					params[paramPosition] = null;
+					Module.PdoParams.set(statement, params);
+				}, pglite_stmt->stmt, param->paramno);
+				break;
+			}
+
 			if(Z_TYPE_P(parameter) == IS_RESOURCE)
 			{
-				php_stream *ps = NULL;
+				php_stream *stream = NULL;
+				zend_string *contents;
 
-				php_stream_from_zval_no_verify(ps, parameter);
+				php_stream_from_zval_no_verify(stream, parameter);
 
-				if(!ps)
+				if(!stream)
 				{
 					pdo_raise_impl_error(stmt->dbh, stmt, "HY105", "Expected a stream resource");
-					return false;
+					return 0;
 				}
 
-				zend_string *zs =  php_stream_copy_to_mem(ps, PHP_STREAM_COPY_ALL, 0);
+				contents = php_stream_copy_to_mem(stream, PHP_STREAM_COPY_ALL, false);
 				zval_ptr_dtor(parameter);
-				ZVAL_STR(parameter, zs ? zs : ZSTR_EMPTY_ALLOC());
+				ZVAL_STR(parameter, contents ? contents : ZSTR_EMPTY_ALLOC());
+			}
 
-				char *buffer = ZSTR_VAL(zs);
-				size_t length = ZSTR_LEN(zs);
+			if(PDO_PARAM_TYPE(param->param_type) == PDO_PARAM_LOB)
+			{
+				if(Z_TYPE_P(parameter) != IS_STRING && !try_convert_to_string(parameter))
+				{
+					pdo_raise_impl_error(stmt->dbh, stmt, "HY105", "LOB parameter could not be converted to a string");
+					return 0;
+				}
 
 				EM_ASM({
 					const statement = Module.targets.get($0);
 					const start = $1;
 					const length = $2;
-					const paramPos = $3;
+					const paramPosition = $3;
+					const params = Module.PdoParams.get(statement) || [];
+					const value = Module.HEAPU8.slice(start, start + length);
 
-					const buffer = new Uint8Array(Module.HEAPU8.buffer.slice(start, start + length));
-
-					if(!Module.PdoParams.has(statement))
-					{
-						Module.PdoParams.set(statement, []);
-					}
-
-					const paramList = Module.PdoParams.get(statement);
-
-					paramList[paramPos] = buffer;
-
-				}, vStmt->stmt, buffer, length, param->paramno);
+					params[paramPosition] = value;
+					Module.PdoParams.set(statement, params);
+				},
+					pglite_stmt->stmt,
+					Z_STRVAL_P(parameter),
+					Z_STRLEN_P(parameter),
+					param->paramno
+				);
 			}
 			else
 			{
 				EM_ASM({
 					const statement = Module.targets.get($0);
-					const paramVal = Module.zvalToJS($1);
-					const paramPos = $2;
+					const paramPosition = $2;
+					const params = Module.PdoParams.get(statement) || [];
 
-					if(!Module.PdoParams.has(statement))
-					{
-						Module.PdoParams.set(statement, []);
-					}
-
-					const paramList = Module.PdoParams.get(statement);
-
-					paramList[paramPos] = paramVal;
-
-				}, vStmt->stmt, &param->parameter, param->paramno);
+					params[paramPosition] = Module.zvalToJS($1);
+					Module.PdoParams.set(statement, params);
+				}, pglite_stmt->stmt, parameter, param->paramno);
 			}
 			break;
+		}
 
 		case PDO_PARAM_EVT_FREE:
 			if(param->driver_data)
 			{
 				efree(param->driver_data);
+				param->driver_data = NULL;
 			}
 			break;
 
@@ -345,24 +465,18 @@ static int pdo_pglite_stmt_param_hook(pdo_stmt_t *stmt, struct pdo_bound_param_d
 			return 1;
 	}
 
-	return true;
-}
-
-static int pdo_pglite_stmt_get_attribute(pdo_stmt_t *stmt, zend_long attr, zval *val)
-{
-	EM_ASM({ console.log('pdo_pglite_stmt_get_attribute', $0, $1, $2); }, stmt, attr, val);
-	return 1;
-}
-
-static int pdo_pglite_stmt_col_meta(pdo_stmt_t *stmt, zend_long colno, zval *return_value)
-{
-	EM_ASM({ console.log('pdo_pglite_stmt_col_meta', $0, $1, $2); }, stmt, colno, return_value);
 	return 1;
 }
 
 static int pdo_pglite_stmt_cursor_closer(pdo_stmt_t *stmt)
 {
-	EM_ASM({ console.log('pdo_pglite_stmt_cursor_closer', $0); }, stmt);
+	pdo_pglite_stmt *pglite_stmt = (pdo_pglite_stmt*) stmt->driver_data;
+
+	pdo_pglite_release_target(&pglite_stmt->results);
+	pglite_stmt->curr = 0;
+	pglite_stmt->row_count = 0;
+	pglite_stmt->done = 1;
+
 	return 1;
 }
 
@@ -373,9 +487,9 @@ const struct pdo_stmt_methods pdo_pglite_stmt_methods = {
 	pdo_pglite_stmt_describe_col,
 	pdo_pglite_stmt_get_col,
 	pdo_pglite_stmt_param_hook,
-	NULL, /* set_attr */
-	pdo_pglite_stmt_get_attribute, /* get_attr */
-	pdo_pglite_stmt_col_meta,
+	NULL, /* set_attribute */
+	NULL, /* get_attribute */
+	NULL, /* get_column_meta */
 	NULL, /* next_rowset */
 	pdo_pglite_stmt_cursor_closer
 };

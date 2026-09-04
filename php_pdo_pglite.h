@@ -6,7 +6,7 @@
 extern zend_module_entry pdo_pglite_module_entry;
 # define phpext_pdo_pglite_ptr &pdo_pglite_module_entry
 
-# define PHP_PDO_PGLITE_VERSION "0.0.0"
+# define PHP_PDO_PGLITE_VERSION "0.1.0"
 
 # if defined(ZTS) && defined(COMPILE_DL_PDO_PGLITE)
 ZEND_TSRMLS_CACHE_EXTERN()
@@ -25,13 +25,14 @@ typedef struct {
 
 typedef struct {
 	jstarget *dbId;
+	bool emulate_prepares;
 	pdo_pglite_error_info einfo;
 } pdo_pglite_db_handle;
 
 typedef struct {
 	pdo_pglite_db_handle *db;
-	unsigned long curr;
-	unsigned long row_count;
+	zend_long curr;
+	zend_long row_count;
 	unsigned pre_fetched:1;
 	unsigned done:1;
 	jstarget *stmt;
