@@ -569,6 +569,10 @@ static int pdo_pglite_handle_get_attribute(
 
 	switch(attr)
 	{
+		case PDO_ATTR_STRINGIFY_FETCHES:
+			ZVAL_BOOL(return_value, dbh->stringify);
+			return 1;
+
 		case PDO_ATTR_EMULATE_PREPARES:
 			ZVAL_BOOL(return_value, handle->emulate_prepares);
 			return 1;
