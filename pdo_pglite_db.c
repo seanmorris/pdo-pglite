@@ -1,28 +1,3 @@
-EM_ASYNC_JS(void, pdo_pglite_close, (jstarget *targetId), {
-	const db = Module.targets.get(targetId);
-
-	try
-	{
-		if(db && typeof db.close === 'function')
-		{
-			await db.close();
-		}
-	}
-	catch(exception)
-	{
-		/* Destructors cannot report a useful PDO error; cleanup must still finish. */
-	}
-	finally
-	{
-		if(db)
-		{
-			Module.tacked.delete(db);
-		}
-
-		Module.targets.remove(targetId);
-	}
-});
-
 static void pdo_pglite_handle_closer(pdo_dbh_t *dbh)
 {
 	pdo_pglite_db_handle *handle = dbh->driver_data;
@@ -87,70 +62,7 @@ static bool pdo_pglite_handle_preparer(
 		sql = rewritten_sql;
 	}
 
-	pglite_stmt->stmt = (jstarget*) EM_ASM_PTR({
-		const db = Module.targets.get($0);
-		const query = UTF8ToString($1);
-		const errorPtr = $2;
-		const sqlstatePtr = $3;
-
-		const writeError = exception => {
-			const message = exception && exception.message
-				? String(exception.message)
-				: String(exception);
-			const state = exception && typeof exception.code === 'string'
-				&& /^[0-9A-Z]{5}$/.test(exception.code)
-				? exception.code
-				: 'HY000';
-			const messageLength = lengthBytesUTF8(message) + 1;
-			const stateLength = lengthBytesUTF8(state) + 1;
-			const messageLocation = _malloc(messageLength);
-			const stateLocation = _malloc(stateLength);
-
-			stringToUTF8(message, messageLocation, messageLength);
-			stringToUTF8(state, stateLocation, stateLength);
-			setValue(errorPtr, messageLocation, '*');
-			setValue(sqlstatePtr, stateLocation, '*');
-		};
-
-		try
-		{
-			if(!db)
-			{
-				throw new Error('The PGlite database handle is no longer available.');
-			}
-
-			const textParser = value => value;
-			const textTypeIds = (
-				'20 114 1082 1114 1184 1186 3802 '
-				+ '199 1000 1001 1002 1003 1005 1006 1007 1008 '
-				+ '1009 1010 1011 1012 1013 1014 1015 1016 1017 '
-				+ '1018 1019 1020 1021 1022 1027 1028 1040 1041 '
-				+ '1115 1182 1183 1185 1187 1231 1263 1270 1561 '
-				+ '1563 2201 2951 3807'
-			).split(' ').map(Number);
-			const parsers = {};
-
-			for(const typeId of textTypeIds)
-			{
-				parsers[typeId] = textParser;
-			}
-
-			const prepared = (...params) => db.query(query, params, {
-				rowMode: 'array',
-				parsers
-			});
-
-			prepared.query = query;
-			Module.tacked.add(prepared);
-
-			return Module.targets.add(prepared);
-		}
-		catch(exception)
-		{
-			writeError(exception);
-			return 0;
-		}
-	}, handle->dbId, ZSTR_VAL(sql), &error, &sqlstate);
+	pglite_stmt->stmt = (jstarget*) pdo_pglite_js_prepare(handle->dbId, ZSTR_VAL(sql), &error, &sqlstate);
 
 	if(rewritten_sql)
 	{
@@ -165,70 +77,6 @@ static bool pdo_pglite_handle_preparer(
 
 	return true;
 }
-
-EM_ASYNC_JS(int, pdo_pglite_real_exec, (
-	jstarget *dbId,
-	const char *sql,
-	char **errorPtr,
-	char **sqlstatePtr
-), {
-	const writeError = exception => {
-		const message = exception && exception.message
-			? String(exception.message)
-			: String(exception);
-		const state = exception && typeof exception.code === 'string'
-			&& /^[0-9A-Z]{5}$/.test(exception.code)
-			? exception.code
-			: 'HY000';
-		const messageLength = lengthBytesUTF8(message) + 1;
-		const stateLength = lengthBytesUTF8(state) + 1;
-		const messageLocation = _malloc(messageLength);
-		const stateLocation = _malloc(stateLength);
-
-		stringToUTF8(message, messageLocation, messageLength);
-		stringToUTF8(state, stateLocation, stateLength);
-		setValue(errorPtr, messageLocation, '*');
-		setValue(sqlstatePtr, stateLocation, '*');
-	};
-
-	try
-	{
-		const db = Module.targets.get(dbId);
-
-		if(!db)
-		{
-			throw new Error('The PGlite database handle is no longer available.');
-		}
-
-		const results = await db.exec(UTF8ToString(sql));
-
-		if(!Array.isArray(results))
-		{
-			return 0;
-		}
-
-		let previousAffectedRows = 0;
-
-		return results.reduce((count, result) => {
-			const affectedRows = Number(result.affectedRows ?? previousAffectedRows);
-			const affectedRowsDelta = Math.max(0, affectedRows - previousAffectedRows);
-
-			previousAffectedRows = affectedRows;
-
-			if(Array.isArray(result.fields) && result.fields.length)
-			{
-				return count;
-			}
-
-			return count + Number(result.rowCount ?? affectedRowsDelta);
-		}, 0);
-	}
-	catch(exception)
-	{
-		writeError(exception);
-		return -1;
-	}
-});
 
 static zend_long pdo_pglite_exec_sql(pdo_dbh_t *dbh, const char *sql)
 {
@@ -356,66 +204,6 @@ static bool pdo_pglite_handle_rollback(pdo_dbh_t *dbh)
 	return pdo_pglite_transaction(dbh, "ROLLBACK");
 }
 
-EM_ASYNC_JS(char*, pdo_pglite_real_last_insert_id, (
-	jstarget *dbId,
-	const char *namePtr,
-	char **errorPtr,
-	char **sqlstatePtr
-), {
-	const writeError = exception => {
-		const message = exception && exception.message
-			? String(exception.message)
-			: String(exception);
-		const state = exception && typeof exception.code === 'string'
-			&& /^[0-9A-Z]{5}$/.test(exception.code)
-			? exception.code
-			: 'HY000';
-		const messageLength = lengthBytesUTF8(message) + 1;
-		const stateLength = lengthBytesUTF8(state) + 1;
-		const messageLocation = _malloc(messageLength);
-		const stateLocation = _malloc(stateLength);
-
-		stringToUTF8(message, messageLocation, messageLength);
-		stringToUTF8(state, stateLocation, stateLength);
-		setValue(errorPtr, messageLocation, '*');
-		setValue(sqlstatePtr, stateLocation, '*');
-	};
-
-	try
-	{
-		const db = Module.targets.get(dbId);
-
-		if(!db)
-		{
-			throw new Error('The PGlite database handle is no longer available.');
-		}
-
-		const hasName = Boolean(namePtr);
-		const name = hasName ? UTF8ToString(namePtr) : null;
-		const result = hasName
-			? await db.query('SELECT CURRVAL($1) AS id', [name])
-			: await db.query('SELECT LASTVAL() AS id');
-		const id = result.rows && result.rows[0] ? result.rows[0].id : null;
-
-		if(id === null || typeof id === 'undefined')
-		{
-			throw new Error('PGlite did not return a sequence value.');
-		}
-
-		const value = String(id);
-		const valueLength = lengthBytesUTF8(value) + 1;
-		const valueLocation = _malloc(valueLength);
-
-		stringToUTF8(value, valueLocation, valueLength);
-		return valueLocation;
-	}
-	catch(exception)
-	{
-		writeError(exception);
-		return 0;
-	}
-});
-
 static zend_string *pdo_pglite_last_insert_id(pdo_dbh_t *dbh, const zend_string *name)
 {
 	pdo_pglite_db_handle *handle = dbh->driver_data;
@@ -501,62 +289,6 @@ static bool pdo_pglite_handle_set_attribute(pdo_dbh_t *dbh, zend_long attr, zval
 	return true;
 }
 
-EM_ASYNC_JS(char*, pdo_pglite_real_server_version, (
-	jstarget *dbId,
-	char **errorPtr,
-	char **sqlstatePtr
-), {
-	const writeError = exception => {
-		const message = exception && exception.message
-			? String(exception.message)
-			: String(exception);
-		const state = exception && typeof exception.code === 'string'
-			&& /^[0-9A-Z]{5}$/.test(exception.code)
-			? exception.code
-			: 'HY000';
-		const messageLength = lengthBytesUTF8(message) + 1;
-		const stateLength = lengthBytesUTF8(state) + 1;
-		const messageLocation = _malloc(messageLength);
-		const stateLocation = _malloc(stateLength);
-
-		stringToUTF8(message, messageLocation, messageLength);
-		stringToUTF8(state, stateLocation, stateLength);
-		setValue(errorPtr, messageLocation, '*');
-		setValue(sqlstatePtr, stateLocation, '*');
-	};
-
-	try
-	{
-		const db = Module.targets.get(dbId);
-
-		if(!db)
-		{
-			throw new Error('The PGlite database handle is no longer available.');
-		}
-
-		const result = await db.query('SHOW server_version');
-		const version = result && result.rows && result.rows[0]
-			? result.rows[0].server_version
-			: null;
-
-		if(typeof version !== 'string' || !version)
-		{
-			throw new Error('PGlite did not return its PostgreSQL server version.');
-		}
-
-		const versionLength = lengthBytesUTF8(version) + 1;
-		const versionLocation = _malloc(versionLength);
-
-		stringToUTF8(version, versionLocation, versionLength);
-		return versionLocation;
-	}
-	catch(exception)
-	{
-		writeError(exception);
-		return 0;
-	}
-});
-
 static int pdo_pglite_handle_get_attribute(
 	pdo_dbh_t *dbh,
 	zend_long attr,
@@ -622,63 +354,6 @@ static const struct pdo_dbh_methods pdo_pglite_db_methods = {
 	NULL, /* in_transaction: use PDO's internal tracking */
 	NULL  /* get_gc */
 };
-
-EM_ASYNC_JS(jstarget*, pdo_pglite_open, (
-	const char *dataSourcePtr,
-	char **errorPtr,
-	char **sqlstatePtr
-), {
-	let pglite = null;
-
-	try
-	{
-		if(typeof Module.PGlite !== 'function')
-		{
-			throw new Error('The PGlite class must be provided to the php-wasm constructor.');
-		}
-
-		const dataSource = UTF8ToString(dataSourcePtr);
-		const dataDir = dataSource
-			? (dataSource.indexOf('://') > 0 ? dataSource : 'idb://' + dataSource)
-			: undefined;
-
-		pglite = new Module.PGlite(dataDir);
-		await pglite.waitReady;
-
-		Module.tacked.add(pglite);
-		return Module.targets.add(pglite);
-	}
-	catch(exception)
-	{
-		if(pglite && typeof pglite.close === 'function')
-		{
-			try
-			{
-				await pglite.close();
-			}
-			catch(closeException)
-			{
-				/* Preserve the initialization error. */
-			}
-		}
-
-		const message = exception && exception.message
-			? String(exception.message)
-			: String(exception);
-		const state = 'HY000';
-		const messageLength = lengthBytesUTF8(message) + 1;
-		const stateLength = lengthBytesUTF8(state) + 1;
-		const messageLocation = _malloc(messageLength);
-		const stateLocation = _malloc(stateLength);
-
-		stringToUTF8(message, messageLocation, messageLength);
-		stringToUTF8(state, stateLocation, stateLength);
-		setValue(errorPtr, messageLocation, '*');
-		setValue(sqlstatePtr, stateLocation, '*');
-
-		return 0;
-	}
-});
 
 static int pdo_pglite_db_handle_factory(pdo_dbh_t *dbh, zval *driver_options)
 {

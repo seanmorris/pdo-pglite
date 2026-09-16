@@ -37,4 +37,6 @@ if test "$PHP_PDO_PGLITE" != "no"; then
   fi
 
   PHP_NEW_EXTENSION(pdo_pglite, pdo_pglite.c, $ext_shared)
+  PHP_ADD_INCLUDE([$ext_builddir/generated], [1])
+  PHP_ADD_MAKEFILE_FRAGMENT
 fi

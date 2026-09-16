@@ -5,17 +5,7 @@ static void pdo_pglite_release_target(jstarget **target_id)
 		return;
 	}
 
-	EM_ASM({
-		const targetId = $0;
-		const target = Module.targets.get(targetId);
-
-		if(target)
-		{
-			Module.tacked.delete(target);
-		}
-
-		Module.targets.remove(targetId);
-	}, *target_id);
+	pdo_pglite_js_release(*target_id);
 
 	*target_id = NULL;
 }
@@ -31,14 +21,7 @@ static int pdo_pglite_stmt_dtor(pdo_stmt_t *stmt)
 
 	if(pglite_stmt->stmt)
 	{
-		EM_ASM({
-			const statement = Module.targets.get($0);
-
-			if(statement)
-			{
-				Module.PdoParams.delete(statement);
-			}
-		}, pglite_stmt->stmt);
+		pdo_pglite_js_forget_params(pglite_stmt->stmt);
 	}
 
 	pdo_pglite_release_target(&pglite_stmt->results);
@@ -49,63 +32,6 @@ static int pdo_pglite_stmt_dtor(pdo_stmt_t *stmt)
 
 	return 1;
 }
-
-EM_ASYNC_JS(jstarget*, pdo_pglite_real_stmt_execute, (
-	jstarget *targetId,
-	char **errorPtr,
-	char **sqlstatePtr
-), {
-	const writeError = exception => {
-		const message = exception && exception.message
-			? String(exception.message)
-			: String(exception);
-		const state = exception && typeof exception.code === 'string'
-			&& /^[0-9A-Z]{5}$/.test(exception.code)
-			? exception.code
-			: 'HY000';
-		const messageLength = lengthBytesUTF8(message) + 1;
-		const stateLength = lengthBytesUTF8(state) + 1;
-		const messageLocation = _malloc(messageLength);
-		const stateLocation = _malloc(stateLength);
-
-		stringToUTF8(message, messageLocation, messageLength);
-		stringToUTF8(state, stateLocation, stateLength);
-		setValue(errorPtr, messageLocation, '*');
-		setValue(sqlstatePtr, stateLocation, '*');
-	};
-
-	const statement = Module.targets.get(targetId);
-	const params = statement && Module.PdoParams.has(statement)
-		? Module.PdoParams.get(statement)
-		: [];
-
-	if(statement)
-	{
-		Module.PdoParams.delete(statement);
-	}
-
-	try
-	{
-		if(!statement)
-		{
-			throw new Error('The PGlite statement handle is no longer available.');
-		}
-
-		const result = await statement(...params);
-		const normalized = {};
-		normalized.rows = Array.isArray(result.rows) ? result.rows : [];
-		normalized.fields = Array.isArray(result.fields) ? result.fields : [];
-		normalized.affectedRows = Number(result.affectedRows ?? result.rowCount ?? 0);
-
-		Module.tacked.add(normalized);
-		return Module.targets.add(normalized);
-	}
-	catch(exception)
-	{
-		writeError(exception);
-		return 0;
-	}
-});
 
 static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 {
@@ -134,30 +60,13 @@ static int pdo_pglite_stmt_execute(pdo_stmt_t *stmt)
 		return false;
 	}
 
-	pglite_stmt->row_count = (zend_long) EM_ASM_INT({
-		const result = Module.targets.get($0);
-		return result && Array.isArray(result.rows) ? result.rows.length : 0;
-	}, pglite_stmt->results);
+	pglite_stmt->row_count = (zend_long) pdo_pglite_js_row_count(pglite_stmt->results);
 
-	column_count = EM_ASM_INT({
-		const result = Module.targets.get($0);
-		return result && Array.isArray(result.fields) ? result.fields.length : 0;
-	}, pglite_stmt->results);
+	column_count = pdo_pglite_js_column_count(pglite_stmt->results);
 
 	php_pdo_stmt_set_column_count(stmt, column_count);
 
-	stmt->row_count = (zend_long) EM_ASM_INT({
-		const result = Module.targets.get($0);
-
-		if(!result)
-		{
-			return 0;
-		}
-
-		return result.fields.length
-			? result.rows.length
-			: result.affectedRows;
-	}, pglite_stmt->results);
+	stmt->row_count = (zend_long) pdo_pglite_js_affected_rows(pglite_stmt->results);
 
 	return true;
 }
@@ -196,21 +105,7 @@ static int pdo_pglite_stmt_describe_col(pdo_stmt_t *stmt, int colno)
 		return 0;
 	}
 
-	column_name = (char*) EM_ASM_PTR({
-		const result = Module.targets.get($0);
-		const field = result && result.fields ? result.fields[$1] : null;
-
-		if(!field || typeof field.name !== 'string')
-		{
-			return 0;
-		}
-
-		const length = lengthBytesUTF8(field.name) + 1;
-		const location = _malloc(length);
-
-		stringToUTF8(field.name, location, length);
-		return location;
-	}, pglite_stmt->results, colno);
+	column_name = (char*) pdo_pglite_js_column_name(pglite_stmt->results, colno);
 
 	if(!column_name)
 	{
@@ -241,68 +136,7 @@ static int pdo_pglite_stmt_get_col(
 		return 0;
 	}
 
-	return EM_ASM_INT({
-		const result = Module.targets.get($0);
-		const current = $1 - 1;
-		const column = $2;
-		const returnValue = $3;
-
-		if(!result || current < 0 || current >= result.rows.length)
-		{
-			return 0;
-		}
-
-		const value = result.rows[current][column];
-		const field = result.fields[column];
-
-		if(field && field.dataTypeID === 17 && value !== null)
-		{
-			const bytes = value instanceof Uint8Array
-				? value
-				: new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-			const location = bytes.byteLength ? _malloc(bytes.byteLength) : 0;
-
-			if(bytes.byteLength)
-			{
-				Module.HEAPU8.set(bytes, location);
-			}
-
-			Module.ccall(
-				'pdo_pglite_create_string',
-				null,
-				['number', 'number', 'number'],
-				[location, bytes.byteLength, returnValue]
-			);
-
-			if(location)
-			{
-				_free(location);
-			}
-
-			return 1;
-		}
-
-		if(typeof value === 'bigint' || (typeof value === 'number' && !Number.isFinite(value)))
-		{
-			Module.jsToZval(String(value), returnValue);
-			return 1;
-		}
-
-		if(value instanceof Date)
-		{
-			Module.jsToZval(value.toISOString(), returnValue);
-			return 1;
-		}
-
-		if(value && typeof value === 'object')
-		{
-			Module.jsToZval(JSON.stringify(value), returnValue);
-			return 1;
-		}
-
-		Module.jsToZval(value, returnValue);
-		return 1;
-	}, pglite_stmt->results, pglite_stmt->curr, colno, return_value);
+	return pdo_pglite_js_column_value(pglite_stmt->results, pglite_stmt->curr, colno, return_value);
 }
 
 static int pdo_pglite_stmt_param_hook(
@@ -383,14 +217,7 @@ static int pdo_pglite_stmt_param_hook(
 
 			if(PDO_PARAM_TYPE(param->param_type) == PDO_PARAM_NULL || Z_TYPE_P(parameter) == IS_NULL)
 			{
-				EM_ASM({
-					const statement = Module.targets.get($0);
-					const paramPosition = $1;
-					const params = Module.PdoParams.get(statement) || [];
-
-					params[paramPosition] = null;
-					Module.PdoParams.set(statement, params);
-				}, pglite_stmt->stmt, param->paramno);
+				pdo_pglite_js_bind_null(pglite_stmt->stmt, param->paramno);
 				break;
 			}
 
@@ -420,17 +247,7 @@ static int pdo_pglite_stmt_param_hook(
 					return 0;
 				}
 
-				EM_ASM({
-					const statement = Module.targets.get($0);
-					const start = $1;
-					const length = $2;
-					const paramPosition = $3;
-					const params = Module.PdoParams.get(statement) || [];
-					const value = Module.HEAPU8.slice(start, start + length);
-
-					params[paramPosition] = value;
-					Module.PdoParams.set(statement, params);
-				},
+				pdo_pglite_js_bind_bytes(
 					pglite_stmt->stmt,
 					Z_STRVAL_P(parameter),
 					Z_STRLEN_P(parameter),
@@ -439,14 +256,7 @@ static int pdo_pglite_stmt_param_hook(
 			}
 			else
 			{
-				EM_ASM({
-					const statement = Module.targets.get($0);
-					const paramPosition = $2;
-					const params = Module.PdoParams.get(statement) || [];
-
-					params[paramPosition] = Module.zvalToJS($1);
-					Module.PdoParams.set(statement, params);
-				}, pglite_stmt->stmt, parameter, param->paramno);
+				pdo_pglite_js_bind_value(pglite_stmt->stmt, parameter, param->paramno);
 			}
 			break;
 		}

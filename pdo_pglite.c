@@ -14,6 +14,7 @@
 #include "zend_closures.h"
 #include <emscripten.h>
 #include "zend_hash.h"
+#include <pdo_pglite_js.h>
 
 #if PHP_MAJOR_VERSION >= 8
 # include "zend_attributes.h"
@@ -168,7 +169,7 @@ PHP_MINFO_FUNCTION(pdo_pglite)
 	php_info_print_table_start();
 	php_info_print_table_row(2, "PGlite support for PDO", "enabled");
 	php_info_print_table_row(2, "PGlite module detected",
-		EM_ASM_INT({ return !!Module.PGlite }) ? "yes" : "no"
+		pdo_pglite_js_available() ? "yes" : "no"
 	);
 	php_info_print_table_end();
 	// DISPLAY_INI_ENTRIES();

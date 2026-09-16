@@ -118,6 +118,41 @@ Do not copy a `dumpDataDir()` archive between these PostgreSQL versions.
 See the [PGlite upgrade guide](https://pglite.dev/docs/upgrade) and
 [PGlite tools documentation](https://pglite.dev/docs/pglite-tools).
 
+## Building and testing
+
+The native bridge bodies live in `js/`, with JSDoc documenting target handles,
+Wasm pointers, async results, and allocation ownership. `pdo_pglite_js.h.in`
+declares their C signatures. PHP's normal Make build expands its includes with
+Emscripten's directives-only preprocessor before `EM_JS` and `EM_ASYNC_JS`
+stringify the JavaScript. Generated headers and dependency files stay under
+`generated/` in the build directory, including separate builds.
+
+Building requires GNU Make 4.3 or newer and Emscripten. Linking consumes the native
+object; it needs no additional JS library or runtime source files. The existing
+async function names and Asyncify behavior are preserved.
+
+With Emscripten 6.0.6 available as `emcc`, run:
+
+```sh
+npm ci
+npm run lint
+npm test
+```
+
+The pinned npm `sm-no-saccade-style` rules cover the bridge, tests, and lint
+configuration. CI runs lint and the fast Make/link checks on Node 22.23.2 and
+24.5.0. Tests cover dependency changes, parallel and separate builds, missing
+inputs, recovery, clean targets, and executing all bridge calls from the compiled
+object alone.
+
+For PHP integration, use a php-wasm checkout:
+
+```sh
+make node-mjs PHP_VERSION=8.5 WITH_PDO_PGLITE=1 WITH_VRZNO=1 \
+  PDO_PGLITE_DEV_PATH=/absolute/path/to/pdo-pglite
+PHP_VERSION=8.5 node --test packages/pdo-pglite/test/basic.mjs
+```
+
 ## Related
 
 - `php-wasm`: <https://github.com/seanmorris/php-wasm>

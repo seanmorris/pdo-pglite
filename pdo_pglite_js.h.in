@@ -1,0 +1,72 @@
+/* Expanded by Make before Emscripten stringifies these function bodies. */
+EM_JS(int, pdo_pglite_js_available, (void), {
+#include "js/pdo_pglite_js_available.js"
+});
+
+EM_ASYNC_JS(void, pdo_pglite_close, (jstarget *targetId), {
+#include "js/pdo_pglite_close.js"
+});
+
+EM_JS(jstarget *, pdo_pglite_js_prepare, (jstarget *dbId, const char *sql, char **errorAddress, char **stateAddress), {
+#include "js/pdo_pglite_js_prepare.js"
+});
+
+EM_ASYNC_JS(int, pdo_pglite_real_exec, (jstarget *dbId, const char *sql, char **errorPtr, char **sqlstatePtr), {
+#include "js/pdo_pglite_real_exec.js"
+});
+
+EM_ASYNC_JS(char*, pdo_pglite_real_last_insert_id, (jstarget *dbId, const char *namePtr, char **errorPtr, char **sqlstatePtr), {
+#include "js/pdo_pglite_real_last_insert_id.js"
+});
+
+EM_ASYNC_JS(char*, pdo_pglite_real_server_version, (jstarget *dbId, char **errorPtr, char **sqlstatePtr), {
+#include "js/pdo_pglite_real_server_version.js"
+});
+
+EM_ASYNC_JS(jstarget*, pdo_pglite_open, (const char *dataSourcePtr, char **errorPtr, char **sqlstatePtr), {
+#include "js/pdo_pglite_open.js"
+});
+
+EM_JS(void, pdo_pglite_js_release, (jstarget *id), {
+#include "js/pdo_pglite_js_release.js"
+});
+
+EM_JS(void, pdo_pglite_js_forget_params, (jstarget *id), {
+#include "js/pdo_pglite_js_forget_params.js"
+});
+
+EM_ASYNC_JS(jstarget*, pdo_pglite_real_stmt_execute, (jstarget *targetId, char **errorPtr, char **sqlstatePtr), {
+#include "js/pdo_pglite_real_stmt_execute.js"
+});
+
+EM_JS(int, pdo_pglite_js_row_count, (jstarget *id), {
+#include "js/pdo_pglite_js_row_count.js"
+});
+
+EM_JS(int, pdo_pglite_js_column_count, (jstarget *id), {
+#include "js/pdo_pglite_js_column_count.js"
+});
+
+EM_JS(int, pdo_pglite_js_affected_rows, (jstarget *id), {
+#include "js/pdo_pglite_js_affected_rows.js"
+});
+
+EM_JS(char *, pdo_pglite_js_column_name, (jstarget *id, int column), {
+#include "js/pdo_pglite_js_column_name.js"
+});
+
+EM_JS(int, pdo_pglite_js_column_value, (jstarget *id, int cursor, int index, zval *destination), {
+#include "js/pdo_pglite_js_column_value.js"
+});
+
+EM_JS(void, pdo_pglite_js_bind_null, (jstarget *id, int position), {
+#include "js/pdo_pglite_js_bind_null.js"
+});
+
+EM_JS(void, pdo_pglite_js_bind_bytes, (jstarget *id, const char *address, size_t size, int position), {
+#include "js/pdo_pglite_js_bind_bytes.js"
+});
+
+EM_JS(void, pdo_pglite_js_bind_value, (jstarget *id, zval *value, int position), {
+#include "js/pdo_pglite_js_bind_value.js"
+});
