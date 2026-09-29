@@ -28,20 +28,24 @@ this repository's JavaScript build and test tools.
 
 ## Install
 
-Use a php-wasm build containing this driver revision. Build it as described in
-[Building](#building), or obtain matching artifacts from
-[php-wasm CI](https://github.com/seanmorris/php-wasm/actions/workflows/build.yaml).
-The API below describes the current sources; older npm binaries can contain an
-older driver.
+Standard php-wasm builds include this driver. Install php-wasm 0.2.0 or newer
+with PGlite:
 
-Install the built runtime package and PGlite into your JavaScript application:
+```sh
+npm install php-wasm@^0.2.0 @electric-sql/pglite@0.5.8
+```
+
+The API below describes the current sources. To use a driver revision newer than
+the published runtime, build php-wasm as described in [Building](#building) or
+obtain matching artifacts from
+[php-wasm CI](https://github.com/seanmorris/php-wasm/actions/workflows/build.yaml),
+then install the generated package directory in place of `php-wasm@^0.2.0`:
 
 ```sh
 npm install /absolute/path/to/php-wasm/packages/php-wasm @electric-sql/pglite@0.5.8
 ```
 
-Replace the path with the complete generated `php-wasm` package directory. Keep
-its JavaScript, Wasm, and support files together. The examples use PGlite 0.5.8.
+Keep its JavaScript, Wasm, and support files together. The examples use PGlite 0.5.8.
 
 The PHP runtime must include PDO-PGlite and Vrzno. Passing the `PGlite`
 constructor supplies the database engine to that compiled driver. Installing
